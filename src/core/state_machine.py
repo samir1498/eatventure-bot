@@ -79,7 +79,6 @@ NORMAL_RULES = [
     ("plane", "plane", RENOVATE),
     ("build", "click", RENOVATE),
     ("delivery", "delivery", DELIVERY),
-    ("helper", "helper", HELPER),
     ("upgrade", "upgrade", UPGRADE),
     ("new_point", "new_point", NEW_POINT),
     ("food", "food", FOOD),
