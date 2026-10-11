@@ -40,7 +40,7 @@ class AndroidActions:
         except subprocess.TimeoutExpired:
 
             logger.warning(
-                "adb travou (timeout %.1fs): %s",
+                "adb hung (timeout %.1fs): %s",
                 timeout,
                 " ".join(args),
             )
@@ -50,7 +50,7 @@ class AndroidActions:
         except OSError as error:
 
             logger.warning(
-                "adb indisponível: %s",
+                "adb unavailable: %s",
                 error,
             )
 
@@ -59,7 +59,7 @@ class AndroidActions:
         if result.returncode != 0:
 
             logger.warning(
-                "adb falhou (%d): %s | %s",
+                "adb failed (%d): %s | %s",
                 result.returncode,
                 " ".join(args),
                 (result.stderr or "").strip(),
@@ -103,7 +103,7 @@ class AndroidActions:
 
         except (KeyError, ValueError):
 
-            logger.warning("dumpsys battery sem 'level' legível")
+            logger.warning("dumpsys battery without readable 'level'")
 
             return None
 
@@ -248,4 +248,48 @@ class AndroidActions:
             "input",
             "keyevent",
             "4",
+        ) is not None
+
+    def focused_package(self, timeout=5.0):
+        """Pacote em primeiro plano (mFocusedApp), ou None se indeterminado. None = adb falhou: quem chama não deve presumir jogo fechado."""
+
+        output = self._run(
+            "shell",
+            "dumpsys",
+            "activity",
+            "activities",
+            timeout=timeout,
+        )
+
+        if not output:
+            return None
+
+        match = re.search(
+            r"mFocusedApp=\S+\s+u\d+\s+([A-Za-z0-9_.]+)/",
+            output,
+        )
+
+        return match.group(1) if match else None
+
+    def launch_package(self, package, timeout=10.0):
+        """Traz o pacote para a frente via monkey (1 evento)."""
+
+        return self._run(
+            "shell",
+            "monkey",
+            "-p", package,
+            "-c", "android.intent.category.LAUNCHER",
+            "1",
+            timeout=timeout,
+        ) is not None
+
+    def collapse_shade(self, timeout=5.0):
+        """Recolhe a gaveta de notificações se estiver aberta (inoffensivo se não estiver)."""
+
+        return self._run(
+            "shell",
+            "cmd",
+            "statusbar",
+            "collapse",
+            timeout=timeout,
         ) is not None

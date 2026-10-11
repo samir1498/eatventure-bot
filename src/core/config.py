@@ -18,6 +18,21 @@ _EXE_SUFFIX = ".exe" if _IS_WINDOWS else ""
 DEVICE_SERIAL = None
 
 
+# ==== GAME ====
+
+# Pacote do jogo: o bot garante que ele está em primeiro plano e o
+# relança sozinho se um anúncio ou o sistema o tirar da frente.
+GAME_PACKAGE = "com.hwqgrhhjfd.idlefastfood"
+
+# De quanto em quanto tempo checar o app em foco (dumpsys custa ~50ms,
+# não pode entrar em todo ciclo).
+GAME_ENSURE_INTERVAL = 15.0
+
+# Espera mínima entre dois relançamentos (jogo abrindo não conta como
+# "fora da frente" de novo).
+GAME_RELAUNCH_COOLDOWN = 30.0
+
+
 # ==== SCRCPY ====
 
 _scrcpy_dir = PROJECT_ROOT / "tools" / "scrcpy"
@@ -96,12 +111,12 @@ else:
 
 CAPTURE_CONNECT_TIMEOUT = 12.0
 CAPTURE_START_TIMEOUT = 6.0
-CAPTURE_MAX_FPS = 60
+CAPTURE_MAX_FPS = 10
 
 
 # ==== UI ====
 
-SHOW_AI_VISION = True
+SHOW_AI_VISION = False
 SHOW_SCRCPY = False
 SHOW_DETECTION_LABELS = True
 SHOW_DETECTION_LAG = True
@@ -119,7 +134,9 @@ AI_WINDOW_POSITION = (600, 50)
 
 SCRCPY_EXTRA_ARGS = [
     "--capture-orientation", "90",
-    "--no-audio"
+    "--no-audio",
+    "--video-bit-rate", "2M",
+    "--max-size", "1024",
 ]
 
 SELECTOR_HEIGHT_FRACTION = 0.80
@@ -261,11 +278,11 @@ CATEGORY_ROIS = {}
 # Ao detectar via template default, grava o recorte na resolução exata do
 # device (mesmo na referência) — as próximas passadas usam esse override
 # em vez do default.
-LEARN_RESOLUTION_TEMPLATES = True
+LEARN_RESOLUTION_TEMPLATES = False
 
 # De quanto em quanto tempo checar se a pasta de templates mudou (template
 # novo, editado ou removido) e recarregar sem reiniciar o bot. 0 desliga.
-TEMPLATES_WATCH_INTERVAL = 2.0
+TEMPLATES_WATCH_INTERVAL = 0
 
 
 # ==== DETECTOR ====
@@ -303,6 +320,20 @@ DISMISS_ACTIONS = {"dismiss", "gray_max", "gray_coin"}
 DISMISS_ATTEMPTS_BEFORE_SCROLL = 5
 DISMISS_HOLD_DURATION = 0.4
 
+# Food-trap guard (NORMAL only): consecutive upgrade_food
+# presses that never resolve fall back to fixed-point dismiss.
+UPGRADE_FOOD_MAX_REPEATS = 3
+UPGRADE_FOOD_DISMISS_ROUNDS = 2
+
+# Suppression (NORMAL only): up_food visible this many
+# consecutive updates without resolving = stuck popup (e.g.
+# unaffordable price) -> suppress up_food so lower-priority
+# upgrade rules get a turn at other stations; then up_food
+# gets another chance. Presence-based (not action-based) so
+# interleaved side-actions can't hide the stuck panel.
+UPGRADE_FOOD_STUCK_UPDATES = 25
+UPGRADE_FOOD_SUPPRESS_UPDATES = 40
+
 SCROLL_BOTTOM_DIRECTION = "up"
 SCROLL_BOTTOM_SWIPES = 6
 
@@ -317,7 +348,7 @@ SWIPE_DURATION_MS = 500
 VISION_INTERVAL = 0.2
 VISION_FILTER_BY_STATE = True
 VISION_PRIORITY_STOP = True
-MAX_DETECTION_AGE = 3.0
+MAX_DETECTION_AGE = 10.0
 
 
 # ==== TIMING ====

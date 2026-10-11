@@ -139,7 +139,7 @@ class DatasetRecorder:
         self.thread.start()
 
         logger.info(
-            "Gravando dataset em %s (sessão %s)",
+            "Recording dataset to %s (session %s)",
             self.root,
             self.session[:8],
         )
@@ -167,8 +167,8 @@ class DatasetRecorder:
             self.thread = None
 
         logger.info(
-            "Dataset: %d gravadas (%.1f MB), %d duplicadas, "
-            "%d descartadas por fila cheia %s",
+            "Dataset: %d saved (%.1f MB), %d duplicates, "
+            "%d dropped (queue full) %s",
             self.saved,
             self.bytes_written / 1_000_000,
             self.duplicates,
@@ -388,10 +388,10 @@ class DatasetRecorder:
             if self.dropped % 20 == 1:
 
                 logger.warning(
-                    "Fila do dataset cheia — %d amostra(s) "
-                    "descartada(s). Disco lento, ou "
-                    "DATASET_IMAGE_FORMAT em png com o bot "
-                    "muito rápido?",
+                    "Dataset queue full — %d sample(s) "
+                    "dropped. Slow disk, or "
+                    "DATASET_IMAGE_FORMAT in png with the bot "
+                    "too fast?",
                     self.dropped,
                 )
 
@@ -416,7 +416,7 @@ class DatasetRecorder:
             except Exception as error:
 
                 logger.exception(
-                    "Erro gravando amostra: %s",
+                    "Error writing sample: %s",
                     error,
                 )
 
@@ -436,11 +436,11 @@ class DatasetRecorder:
             if not self.disk_warned:
 
                 logger.warning(
-                    "Dataset chegou ao teto de %d MB — parando "
-                    "de gravar. O bot continua jogando. Suba "
-                    "DATASET_MAX_DISK_MB, mude "
-                    "DATASET_IMAGE_FORMAT para jpg (4.3x menor) "
-                    "ou mova a pasta.",
+                    "Dataset reached the %d MB cap — stopping "
+                    "writes. The bot keeps playing. Raise "
+                    "DATASET_MAX_DISK_MB, switch "
+                    "DATASET_IMAGE_FORMAT to jpg (4.3x smaller) "
+                    "or move the folder.",
                     DATASET_MAX_DISK_MB,
                 )
 
@@ -469,8 +469,8 @@ class DatasetRecorder:
                 ):
 
                     logger.info(
-                        "'%s' preso em unchanged — parando de "
-                        "gravar até mudar de ação ou dar certo",
+                        "'%s' stuck in unchanged — stopping "
+                        "writes until the action changes or succeeds",
                         sample.action,
                     )
 
@@ -514,7 +514,7 @@ class DatasetRecorder:
         if not cv2.imwrite(str(caminho), frame, params):
 
             logger.warning(
-                "Não conseguiu gravar %s",
+                "Could not write %s",
                 caminho,
             )
 
@@ -535,7 +535,7 @@ class DatasetRecorder:
 
         self.bytes_written += caminho.stat().st_size
 
-        rotulo = sample.action or "negativo"
+        rotulo = sample.action or "negative"
 
         self.by_action[rotulo] = self.by_action.get(rotulo, 0) + 1
 
@@ -549,8 +549,8 @@ class DatasetRecorder:
             except Exception as error:
 
                 logger.warning(
-                    "Falha ao indexar no banco (o arquivo "
-                    "foi gravado): %s",
+                    "Failed to index in database (file "
+                    "was written): %s",
                     error,
                 )
 

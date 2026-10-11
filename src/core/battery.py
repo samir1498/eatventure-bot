@@ -96,9 +96,9 @@ class BatteryMonitor:
                 if anterior != nivel:
 
                     logger.info(
-                        "Bateria: %d%%%s",
+                        "Battery: %d%%%s",
                         nivel,
-                        " (carregando)" if carregando else "",
+                        " (charging)" if carregando else "",
                     )
 
             # Espera interrompível.

@@ -25,6 +25,8 @@ from core.config import (                         # noqa: E402
     STATE_ENTRY_SETTLE,
     STATE_TIMEOUTS,
     SWIPE_WAITING_TIME,
+    UPGRADE_FOOD_STUCK_UPDATES,
+    UPGRADE_FOOD_SUPPRESS_UPDATES,
     UP_FOOD_WAIT,
 )
 from core import state_machine as sm              # noqa: E402
@@ -145,7 +147,7 @@ def test_uma_acao_por_cooldown():
 
     machine, actions, clock = build()
 
-    detections = [detection("box")]
+    detections = [detection("open_store")]
 
     machine.update(detections)
 
@@ -532,7 +534,7 @@ def test_achar_algo_adia_a_exploracao_sem_cancelar():
 
     clock.advance(machine.exploration_delay + 0.1)
 
-    machine.update([detection("box")])
+    machine.update([detection("open_store")])
 
     # No frame em que achou, não rola.
     assert not swipes_de(actions), actions.calls
@@ -856,11 +858,11 @@ def test_contagem_de_repeticao_zera_ao_progredir():
     clock.advance(ACTION_COOLDOWN + 0.01)
 
     # Ação diferente: a contagem reinicia.
-    machine.update([detection("box")])
+    machine.update([detection("open_store")])
 
     assert machine._repeat_count == 1, machine._repeat_count
 
-    assert machine._last_action == "open_box", (
+    assert machine._last_action == "open_store_click", (
         machine._last_action
     )
 
@@ -919,9 +921,10 @@ def test_nunca_usa_back():
 def test_up_food_em_normal_nao_escala_para_rolagem():
     """
     A escada de fechamento vale só para DISMISS_ACTIONS, e "upgrade_food"
-    não é uma delas — up_food preso em NORMAL repete o press para sempre
-    em vez de rolar. O aviso de ação repetida (test_acao_repetida_gera_aviso)
-    é o que sobra para avisar.
+    não é uma delas — up_food preso em NORMAL cai no _trap_guard (3
+    presses, 2 rodadas de "dismiss", press tenta de novo) em vez de
+    rolar. O "dismiss" conta na escada mas nunca acumula o bastante
+    para virar scroll_bottom, porque o press do meio zera a contagem.
     """
 
     machine, actions, clock = build()
@@ -934,12 +937,69 @@ def test_up_food_em_normal_nao_escala_para_rolagem():
 
     assert "scroll_bottom" not in actions.actions, actions.actions
 
-    assert set(actions.actions) == {"upgrade_food"}, (
+    assert set(actions.actions) == {"upgrade_food", "dismiss"}, (
         actions.actions
     )
 
-    # A escada nem começou a contar.
+    # A escada nunca chega ao limiar da rolagem.
     assert machine._dismiss_attempts == 0
+
+
+def test_painel_travado_suprime_up_food_e_libera_outros_upgrades():
+    """
+    O cenário da Wrap emperrada: up_food visível por N updates
+    seguidos sem resolver (preço inalcançável) = popup travado.
+    A supressão pula up_food para que regras de prioridade menor
+    (upgrades de outras estações) tenham a vez; quando a janela
+    esgota, up_food ganha outra chance (alterna).
+    """
+
+    machine, actions, clock = build()
+
+    tela = [detection("up_food"), detection("upgrade")]
+
+    for _ in range(UPGRADE_FOOD_STUCK_UPDATES + 5):
+
+        machine.update(tela)
+
+        clock.advance(ACTION_COOLDOWN + 0.01)
+
+    # A regra de baixo ("upgrade") teve a vez no meio da janela.
+    assert "upgrade" in actions.actions, actions.actions
+
+    # Sair de NORMAL é progresso: a supressão zerou na troca.
+    assert machine._up_food_suppressed == 0
+
+    # Volta para NORMAL e confirma a alternância: sozinho na
+    # tela, up_food é pausado pela supressão e depois volta
+    # (alterna em vez de morrer para um lado só).
+    machine.update([detection("close")])
+
+    clock.advance(ACTION_COOLDOWN + 0.01)
+
+    assert machine.state == sm.NORMAL, machine.state
+
+    antes = actions.actions.count("upgrade_food")
+
+    for _ in range(UPGRADE_FOOD_STUCK_UPDATES):
+
+        machine.update([detection("up_food")])
+
+        clock.advance(ACTION_COOLDOWN + 0.01)
+
+    assert machine._up_food_suppressed > 0
+
+    for _ in range(UPGRADE_FOOD_SUPPRESS_UPDATES + 1):
+
+        machine.update([detection("up_food")])
+
+        clock.advance(ACTION_COOLDOWN + 0.01)
+
+    assert machine._up_food_suppressed == 0
+
+    assert actions.actions.count("upgrade_food") > antes, (
+        actions.actions
+    )
 
 
 def test_nao_age_duas_vezes_sobre_a_mesma_tela():
@@ -1345,7 +1405,7 @@ def test_escada_zera_quando_algo_e_resolvido():
     )
 
     # Progresso: uma ação de jogo.
-    machine.update([detection("box")])
+    machine.update([detection("open_store")])
 
     clock.advance(ACTION_COOLDOWN + 0.01)
 
@@ -1378,15 +1438,15 @@ def test_apenas_acoes_de_fechar_escalam():
 
     for _ in range(DISMISS_ATTEMPTS_BEFORE_SCROLL + 3):
 
-        machine.update([detection("box")])
+        machine.update([detection("open_store")])
 
         clock.advance(ACTION_COOLDOWN + 0.01)
 
-    assert set(actions.actions) == {"open_box"}, actions.actions
+    assert set(actions.actions) == {"open_store_click"}, actions.actions
 
     assert "gray_max" in DISMISS_ACTIONS
     assert "dismiss" in DISMISS_ACTIONS
-    assert "open_box" not in DISMISS_ACTIONS
+    assert "open_store_click" not in DISMISS_ACTIONS
 
 
 def main():

@@ -46,7 +46,7 @@ class PostgresStore:
 
         self.connection.autocommit = False
 
-        logger.info("Conectado ao Postgres para indexar o dataset.")
+        logger.info("Connected to Postgres to index the dataset.")
 
         return self
 
@@ -59,7 +59,7 @@ class PostgresStore:
         except Exception as error:
 
             logger.warning(
-                "Não conseguiu gravar o último lote: %s",
+                "Could not write the last batch: %s",
                 error,
             )
 

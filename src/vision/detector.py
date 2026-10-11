@@ -276,7 +276,7 @@ class Detector:
         if not TEMPLATES_DIR.exists():
 
             logger.error(
-                "Pasta de templates não encontrada: %s",
+                "Template folder not found: %s",
                 TEMPLATES_DIR,
             )
 
@@ -320,8 +320,8 @@ class Detector:
             if resolucao is None:
 
                 logger.warning(
-                    "Pasta de templates ignorada (nome não é "
-                    "'LARGURAxALTURA'): %s",
+                    "Template folder ignored (name is not "
+                    "'WIDTHxHEIGHT'): %s",
                     resolution_dir.name,
                 )
 
@@ -348,8 +348,8 @@ class Detector:
                 self._load_fidelity(resolucao, resolution_dir)
 
         logger.info(
-            "Templates: %d default em %d categorias %s | "
-            "overrides para %d resolução(ões) %s",
+            "Templates: %d default across %d categories %s | "
+            "overrides for %d resolution(s) %s",
             len(self.templates),
             len(self.by_category),
             {
@@ -369,9 +369,9 @@ class Detector:
         if not self.templates:
 
             logger.error(
-                "NENHUM template carregado de %s — o detector "
-                "não tem com o que comparar, e o bot não vai "
-                "agir.",
+                "NO templates loaded from %s — the detector "
+                "has nothing to compare against, and the bot "
+                "will not act.",
                 DEFAULT_TEMPLATES_DIR,
             )
 
@@ -499,7 +499,7 @@ class Detector:
             )
 
             logger.info(
-                "Pasta de templates mudou (%s) — recarregando.",
+                "Template folder changed (%s) — reloading.",
                 "overrides"
                 if manter_defaults
                 else "defaults",
@@ -631,7 +631,7 @@ class Detector:
         except (OSError, ValueError) as error:
 
             logger.warning(
-                "Não consegui ler %s: %s",
+                "Could not read %s: %s",
                 caminho,
                 error,
             )
@@ -673,7 +673,7 @@ class Detector:
         except OSError as error:
 
             logger.warning(
-                "Não consegui salvar %s: %s",
+                "Could not save %s: %s",
                 self._fidelity_path(resolution_dir),
                 error,
             )
@@ -688,7 +688,7 @@ class Detector:
         if raw is None:
 
             logger.error(
-                "Erro ao carregar: %s",
+                "Error loading: %s",
                 image_path,
             )
 
@@ -844,8 +844,8 @@ class Detector:
         if TEMPLATE_SCALE_BASIS != "short_side":
 
             logger.warning(
-                "TEMPLATE_SCALE_BASIS desconhecido (%r) — "
-                "usando 'short_side'.",
+                "Unknown TEMPLATE_SCALE_BASIS (%r) — "
+                "using 'short_side'.",
                 TEMPLATE_SCALE_BASIS,
             )
 
@@ -1055,8 +1055,8 @@ class Detector:
                 ).append(variante)
 
         logger.info(
-            "Frame %dx%d (referência %dx%d) — %d "
-            "templates default em %d escala(s) %s (base %.3f por '%s').",
+            "Frame %dx%d (reference %dx%d) — %d "
+            "default templates across %d scale(s) %s (base %.3f by '%s').",
             frame_width,
             frame_height,
             REFERENCE_WIDTH,
@@ -1152,7 +1152,7 @@ class Detector:
             except Exception:
 
                 logger.exception(
-                    "Erro processando candidata de aprendizado"
+                    "Error processing learning candidate"
                 )
 
     def _process_learn_candidate(
@@ -1186,7 +1186,7 @@ class Detector:
         if not cv2.imwrite(str(destino), crop):
 
             logger.warning(
-                "Não conseguiu gravar template aprendido: %s",
+                "Could not write learned template: %s",
                 destino,
             )
 
@@ -1236,7 +1236,7 @@ class Detector:
             self._reassina_overrides()
 
         logger.info(
-            "Override %dx%d %s/%s: fidelidade %s -> %.4f",
+            "Override %dx%d %s/%s: fidelity %s -> %.4f",
             frame_width,
             frame_height,
             categoria,
@@ -1370,7 +1370,7 @@ class Detector:
         if x2 <= x1 or y2 <= y1:
 
             logger.warning(
-                "ROI inválida para %s: %s",
+                "Invalid ROI for %s: %s",
                 category,
                 roi,
             )
@@ -2221,7 +2221,7 @@ class Detector:
             # ler "0.412" como "o template não parece com a tela" seria
             # errado, pode ser só a escala que ainda não foi sondada.
             if self._em_sonda(categoria):
-                texto += " ~sonda"
+                texto += " ~probing"
 
             partes.append(texto)
 
@@ -2229,7 +2229,7 @@ class Detector:
         self._miss_at = agora
 
         logger.info(
-            "não detectado (melhor match / corte): %s",
+            "not detected (best match / cutoff): %s",
             self._miss_text,
         )
 
@@ -2380,7 +2380,7 @@ class Detector:
             if source is None and self._last_frame_size is not None:
                 source = "x".join(str(n) for n in self._last_frame_size)
 
-            return source or "resolucao"
+            return source or "resolution"
 
         # No default a resolução é procedência: diz em qual tela o recorte
         # foi tirado, não em qual ele casou.
@@ -2476,7 +2476,7 @@ class Detector:
 
                 self._hud_text(
                     output,
-                    f"captura  {capture_fps:5.1f} fps",
+                    f"capture  {capture_fps:5.1f} fps",
                     y,
                     self.HUD_NEUTRAL,
                 )
@@ -2527,7 +2527,7 @@ class Detector:
 
             self._hud_text(
                 output,
-                f"atraso   {lag * 1000:5.0f} ms",
+                f"lag      {lag * 1000:5.0f} ms",
                 y,
                 self.HUD_OK
                 if lag <= limit * 0.5
@@ -2545,15 +2545,15 @@ class Detector:
 
             if level is not None:
 
-                label = f"bateria  {level:5d} %"
+                label = f"battery  {level:5d} %"
 
                 if charging:
-                    label += "  carregando"
+                    label += "  charging"
 
                 # Leitura velha é pior que ausente (parece atual); passar do
                 # dobro do intervalo é sinal de adb travado.
                 elif age > BATTERY_POLL_INTERVAL * 2:
-                    label += f"  ({age:.0f}s atras)"
+                    label += f"  ({age:.0f}s stale)"
 
                 self._hud_text(
                     output,
@@ -2576,7 +2576,7 @@ class Detector:
 
         if estado:
 
-            label = f"estado   {estado}"
+            label = f"state    {estado}"
 
             procurados = stats.get("searched")
 
@@ -2613,7 +2613,7 @@ class Detector:
 
             self._hud_text(
                 output,
-                f"template {cobertos:4d}/{total} da resolucao",
+                f"template {cobertos:4d}/{total} of resolution",
                 y,
                 self.HUD_OK
                 if total and cobertos >= total
@@ -2630,10 +2630,10 @@ class Detector:
 
         if quantas is not None:
 
-            label = f"deteccoes {quantas:4d}"
+            label = f"detections {quantas:4d}"
 
             if aguardando:
-                label += "  (aguardando a tela parar)"
+                label += "  (waiting for screen to settle)"
 
             self._hud_text(
                 output,
@@ -2656,7 +2656,7 @@ class Detector:
 
             self._hud_text(
                 output,
-                f"VISAO: {erro[:48]}",
+                f"VISION: {erro[:48]}",
                 y,
                 self.HUD_BAD,
                 scale=0.6,
@@ -2670,10 +2670,10 @@ class Detector:
 
             corrido, ultimo, quantos = cycle
 
-            label = f"reforma {quantos:5d}  {formata_duracao(corrido)}"
+            label = f"renovation {quantos:5d}  {formata_duracao(corrido)}"
 
             if ultimo is not None:
-                label += f"  (ult {formata_duracao(ultimo)})"
+                label += f"  (last {formata_duracao(ultimo)})"
 
             # Vermelho só quando há com o que comparar: sem
             # ciclo anterior, "demorado" não quer dizer nada.

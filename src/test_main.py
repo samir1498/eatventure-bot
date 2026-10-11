@@ -63,7 +63,7 @@ def main(argv=None):
 
             if not capture.is_running():
 
-                logger.warning("Stream encerrado.")
+                logger.warning("Stream ended.")
 
                 break
 
@@ -79,7 +79,7 @@ def main(argv=None):
 
     except KeyboardInterrupt:
 
-        logger.info("Interrompido pelo usuário.")
+        logger.info("Interrupted by user.")
 
     finally:
 

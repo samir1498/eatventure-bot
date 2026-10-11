@@ -67,7 +67,7 @@ def start_scrcpy(device_id):
 
     window_title = f"EatVenture layouts ({device_id})"
 
-    logger.info("Iniciando %s...", window_title)
+    logger.info("Starting %s...", window_title)
 
     return subprocess.Popen(
         [
@@ -115,7 +115,7 @@ def run_loop(capture, detector):
 
         if not capture.is_running():
 
-            logger.warning("Stream encerrado.")
+            logger.warning("Stream ended.")
 
             break
 
@@ -144,7 +144,7 @@ def run_loop(capture, detector):
                 cobertos, total = detector.template_coverage() or (0, 0)
 
                 logger.info(
-                    "cobertura da resolução atual: %d/%d defaults com override",
+                    "current resolution coverage: %d/%d defaults with override",
                     cobertos,
                     total,
                 )
@@ -209,7 +209,7 @@ def main(argv=None):
 
     except KeyboardInterrupt:
 
-        logger.info("Cancelado.")
+        logger.info("Cancelled.")
 
         return 1
 
@@ -225,9 +225,9 @@ def main(argv=None):
     detector = Detector()
 
     logger.info(
-        "Atualizador de layouts rodando para %s — encerrar com %s",
+        "Layout updater running for %s — quit with %s",
         device_id,
-        "ESC ou Ctrl+C" if SHOW_AI_VISION else "Ctrl+C",
+        "ESC or Ctrl+C" if SHOW_AI_VISION else "Ctrl+C",
     )
 
     try:
@@ -241,11 +241,11 @@ def main(argv=None):
 
     except KeyboardInterrupt:
 
-        logger.info("Interrompido pelo usuário.")
+        logger.info("Interrupted by user.")
 
     finally:
 
-        logger.info("Encerrando atualizador de layouts...")
+        logger.info("Shutting down layout updater...")
 
         capture.stop()
 

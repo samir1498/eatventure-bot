@@ -30,20 +30,20 @@ def formata_bateria(leitura):
     """
 
     if not leitura:
-        return "bateria ?"
+        return "battery ?"
 
     nivel, carregando, idade = leitura
 
     if nivel is None:
-        return "bateria ?"
+        return "battery ?"
 
-    texto = f"bateria {nivel}%"
+    texto = f"battery {nivel}%"
 
     if carregando:
-        return texto + " carregando"
+        return texto + " charging"
 
     if idade and idade > BATTERY_POLL_INTERVAL * 2:
-        texto += f" ({idade:.0f}s atras)"
+        texto += f" ({idade:.0f}s ago)"
 
     return texto
 
@@ -159,21 +159,21 @@ class StatusPanel:
         # "há quanto tempo" é o que diferencia bot trabalhando
         # de bot parado numa ação que deu certo uma vez.
         if acao_ha is not None and acao_ha > 1.0:
-            acao = f"{acao}  ({acao_ha:.0f}s atrás)"
+            acao = f"{acao}  ({acao_ha:.0f}s ago)"
 
         corrido = time.monotonic() - self.iniciado
 
         linhas = [
-            f"Dispositivo conectado: {self.device}",
-            f"Voou: {resumo.get('voos', 0)} vezes",
-            f"Renovou: {resumo.get('reformas', 0)} vezes",
-            f"Ação: {acao}",
+            f"Connected device: {self.device}",
+            f"Flew: {resumo.get('voos', 0)} times",
+            f"Renovated: {resumo.get('reformas', 0)} times",
+            f"Action: {acao}",
         ]
 
         rodape = (
-            f"estado {resumo.get('estado', '?')}"
-            f" | {resumo.get('acoes', 0)} ações"
-            f" | {formata_duracao(corrido)} rodando"
+            f"state {resumo.get('estado', '?')}"
+            f" | {resumo.get('acoes', 0)} actions"
+            f" | {formata_duracao(corrido)} running"
         )
 
         if extra:
@@ -186,9 +186,9 @@ class StatusPanel:
         if self.misses_line:
 
             linhas.append(
-                f"Sem deteccao: {misses}"
+                f"No detection: {misses}"
                 if misses
-                else "Sem deteccao: —"
+                else "No detection: —"
             )
 
         # Trava o tamanho: uma linha nova sem ajustar a conta comeria a

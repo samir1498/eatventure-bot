@@ -116,8 +116,8 @@ class ActionManager:
             )
 
             logger.warning(
-                "Resolução do device desconhecida, "
-                "assumindo %dx%d",
+                "Unknown device resolution, "
+                "assuming %dx%d",
                 REFERENCE_WIDTH,
                 REFERENCE_HEIGHT,
             )
@@ -165,7 +165,7 @@ class ActionManager:
 
             logger.warning(
                 "Frame %dx%d != device %dx%d — "
-                "convertendo coordenadas de toque.",
+                "converting tap coordinates.",
                 width,
                 height,
                 self.device_size[0],
@@ -257,7 +257,7 @@ class ActionManager:
         if kind is None:
 
             logger.warning(
-                "Ação desconhecida: %s",
+                "Unknown action: %s",
                 action,
             )
 
@@ -319,7 +319,7 @@ class ActionManager:
             except Exception as error:
 
                 logger.exception(
-                    "Erro executando %s: %s",
+                    "Error executing %s: %s",
                     job,
                     error,
                 )
@@ -419,7 +419,7 @@ class ActionManager:
         """Toque mantido curto em ponto fixo (diferente de _press, que segura no centro da detecção)."""
 
         logger.info(
-            "%s -> hold (%d, %d) por %.2fs",
+            "%s -> hold (%d, %d) for %.2fs",
             name,
             x,
             y,
@@ -435,7 +435,7 @@ class ActionManager:
     def _press(self, name, x, y):
 
         logger.info(
-            "%s -> press (%d, %d) por %.1fs",
+            "%s -> press (%d, %d) for %.1fs",
             name,
             x,
             y,
@@ -452,7 +452,7 @@ class ActionManager:
         """Sequência de swipes até o fim da tela. Roda na thread de ação, não bloqueia o loop principal."""
 
         logger.info(
-            "%s -> %d swipes '%s' (rolar até o fim)",
+            "%s -> %d swipes '%s' (scrolling to end)",
             name,
             SCROLL_BOTTOM_SWIPES,
             SCROLL_BOTTOM_DIRECTION,
@@ -493,7 +493,7 @@ class ActionManager:
         else:
 
             logger.warning(
-                "Direção de swipe inválida: %s",
+                "Invalid swipe direction: %s",
                 direction,
             )
 

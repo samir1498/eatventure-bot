@@ -174,8 +174,8 @@ class VisionWorker:
         self._error_kinds.add(type(error).__name__)
 
         logger.exception(
-            "Falha na passada do detector — %s. A thread "
-            "continua; esta mensagem não repete.",
+            "Detector pass failed — %s. Thread "
+            "continues; this message does not repeat.",
             self.last_error,
         )
 

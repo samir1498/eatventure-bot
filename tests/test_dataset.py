@@ -934,9 +934,9 @@ def test_sem_recorder_a_maquina_funciona_igual():
     machine.action_settle = 0.0
     machine.last_action_time = 0.0
 
-    machine.update([deteccao("box")], 0.1, frame(180), time.monotonic())
+    machine.update([deteccao("open_store")], 0.1, frame(180), time.monotonic())
 
-    assert acoes.executadas == ["open_box"], acoes.executadas
+    assert acoes.executadas == ["open_store_click"], acoes.executadas
 
 
 def test_swipe_de_exploracao_e_gravado():

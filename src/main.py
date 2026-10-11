@@ -20,6 +20,9 @@ from core.config import (
     DATASET_DB_ENABLED,
     DATASET_DB_SCHEMA,
     DEVICE_SERIAL,
+    GAME_ENSURE_INTERVAL,
+    GAME_PACKAGE,
+    GAME_RELAUNCH_COOLDOWN,
     LOG_LEVEL,
     DATASET_SAVE,
     SCRCPY_EXTRA_ARGS,
@@ -80,7 +83,7 @@ def start_scrcpy(device_id):
 
     window_title = f"EatVenture ({device_id})"
 
-    logger.info("Iniciando %s...", window_title)
+    logger.info("Starting %s...", window_title)
 
     return subprocess.Popen(
         [
@@ -124,9 +127,9 @@ def build_recorder(ai_collect=None):
         if not DATASET_DB_DSN:
 
             logger.error(
-                "DATASET_DB_ENABLED ligado mas "
-                "DATASET_DB_DSN vazio — gravando só em "
-                "arquivo. Ver docs/dataset.md."
+                "DATASET_DB_ENABLED on but "
+                "DATASET_DB_DSN empty — writing to "
+                "file only. See docs/dataset.md."
             )
 
         else:
@@ -145,9 +148,9 @@ def build_recorder(ai_collect=None):
 
                 # Banco fora não pode impedir a coleta: imagens não se recuperam depois.
                 logger.error(
-                    "Sem conexão com o banco (%s) — gravando "
-                    "só em arquivo. Depois dá para importar "
-                    "com tools/dataset_import.py.",
+                    "No database connection (%s) — writing "
+                    "to file only. You can import later "
+                    "with tools/dataset_import.py.",
                     error,
                 )
 
@@ -185,7 +188,44 @@ def run_loop(
     # Evita repetir o aviso de visão caída a cada quadro.
     vision_avisada = False
 
+    # Zeros de propósito: a primeira volta já garante o jogo aberto.
+    ultima_garantia_jogo = 0.0
+    ultimo_reinicio_jogo = 0.0
+
     while True:
+
+        # O jogo pode sair da frente sozinho (anúncio, sistema): sem
+        # isto o bot age sobre a tela errada ou fica parado. dumpsys
+        # custa ~50ms, por isso só a cada GAME_ENSURE_INTERVAL.
+        agora = time.monotonic()
+
+        if agora - ultima_garantia_jogo >= GAME_ENSURE_INTERVAL:
+
+            ultima_garantia_jogo = agora
+
+            pacote = actions.android.focused_package()
+
+            if (
+                pacote is not None
+                and pacote != GAME_PACKAGE
+                and agora - ultimo_reinicio_jogo >= GAME_RELAUNCH_COOLDOWN
+            ):
+
+                logger.warning(
+                    "Game not in foreground (%s) — relaunching %s.",
+                    pacote,
+                    GAME_PACKAGE,
+                )
+
+                actions.android.collapse_shade()
+
+                if actions.android.launch_package(GAME_PACKAGE):
+
+                    ultimo_reinicio_jogo = agora
+
+                    # Descarta o frame da tela antiga: a próxima
+                    # volta já captura o jogo abrindo.
+                    continue
 
         # Timeout curto para a janela do OpenCV continuar respondendo
         # (e o ESC funcionar) mesmo se o stream travar.
@@ -196,7 +236,7 @@ def run_loop(
 
         if not capture.is_running():
 
-            logger.warning("Stream encerrado.")
+            logger.warning("Stream ended.")
 
             break
 
@@ -236,10 +276,10 @@ def run_loop(
         if not vision.is_alive() and not vision_avisada:
 
             logger.error(
-                "A thread da visão não está rodando (%s) — "
-                "não vão existir detecções e o bot não vai "
-                "agir.",
-                vision.last_error or "motivo desconhecido",
+                "Vision thread is not running (%s) — "
+                "there will be no detections and the bot "
+                "will not act.",
+                vision.last_error or "unknown reason",
             )
 
             vision_avisada = True
@@ -333,7 +373,7 @@ def run_loop(
                     if vision.is_alive()
                     else (
                         vision.last_error
-                        or "thread da visão parada"
+                        or "vision thread stopped"
                     )
                 ),
             },
@@ -361,7 +401,7 @@ def main(argv=None):
 
     except KeyboardInterrupt:
 
-        logger.info("Cancelado.")
+        logger.info("Cancelled.")
 
         return 1
 
@@ -375,9 +415,9 @@ def main(argv=None):
     ]
 
     logger.info(
-        "Janelas: %s | encerrar com %s",
-        ", ".join(windows) or "nenhuma (headless)",
-        "ESC ou Ctrl+C" if SHOW_AI_VISION else "Ctrl+C",
+        "Windows: %s | quit with %s",
+        ", ".join(windows) or "none (headless)",
+        "ESC or Ctrl+C" if SHOW_AI_VISION else "Ctrl+C",
     )
 
     # Espelho do scrcpy é opcional: a captura do bot não passa por ele.
@@ -454,7 +494,7 @@ def main(argv=None):
 
     except KeyboardInterrupt:
 
-        logger.info("Interrompido pelo usuário.")
+        logger.info("Interrupted by user.")
 
     finally:
 
@@ -466,7 +506,7 @@ def main(argv=None):
 
             log.set_console_level(LOG_LEVEL)
 
-        logger.info("Encerrando EatVenture AI...")
+        logger.info("Shutting down EatVenture AI...")
 
         # Antes do resto: fecha a amostra pendente e grava o último lote no banco.
         if recorder:

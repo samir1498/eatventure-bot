@@ -24,6 +24,10 @@ from core.config import (
     SWIPE_START_DIRECTION,
     SWIPE_WAIT_FOR_NO_ACTION,
     SWIPE_WAITING_TIME,
+    UPGRADE_FOOD_DISMISS_ROUNDS,
+    UPGRADE_FOOD_MAX_REPEATS,
+    UPGRADE_FOOD_STUCK_UPDATES,
+    UPGRADE_FOOD_SUPPRESS_UPDATES,
     UP_FOOD_WAIT,
     VIEW_MOVING_ACTIONS,
 )
@@ -48,14 +52,13 @@ HELPER = "HELPER"
 # antes de qualquer ação de jogo.
 #
 # up_food em NORMAL faz o MESMO que em FOOD (long press de
-# UPGRADE_FOOD_PRESS s). Escolha deliberada contra dispensar o
-# painel: custa que, se o painel abrir sem querer, o bot gasta
-# moeda e trava o tempo do press. Consequência: "upgrade_food"
-# não está em DISMISS_ACTIONS, então a escada de fechamento não
-# vale aqui — preso, ele repete o press indefinidamente (aviso
-# via REPEATED_ACTION_WARNING). Para voltar a dispensar, troque
-# por "dismiss" (coberto por
-# tests/test_pipeline.py::test_dismiss_toca_no_ponto_neutro).
+# UPGRADE_FOOD_PRESS s). Se o painel abrir sem querer e o press
+# nunca resolver, _trap_guard desvia para "dismiss" (HOLD em
+# ponto fixo, coberto por
+# tests/test_pipeline.py::test_dismiss_toca_no_ponto_neutro)
+# por UPGRADE_FOOD_DISMISS_ROUNDS rodadas antes de tentar o
+# press de novo. "upgrade_food" segue fora de DISMISS_ACTIONS
+# de propósito: a escada de fechamento não vale para ele.
 NORMAL_RULES = [
     ("open_store", "open_store_click", None),
     ("close", "close", None),
@@ -69,7 +72,7 @@ NORMAL_RULES = [
     ("helper", "helper", HELPER),
     ("upgrade", "upgrade", UPGRADE),
     ("new_point", "new_point", NEW_POINT),
-    ("box", "open_box", None),
+    # ("box", "open_box", None) disabled: user opens boxes manually.
     ("food", "food", FOOD),
 ]
 
@@ -252,6 +255,16 @@ class StateMachine:
         self._last_action = None
         self._repeat_count = 0
 
+        # Presses consecutivos de upgrade_food em NORMAL (lê
+        # _trap_guard: painel que nunca resolve cai para dismiss).
+        self._up_food_repeats = 0
+
+        # Updates consecutivos com up_food visível sem o painel
+        # resolver (lê update: popup travado, ex. preço
+        # inalcançável) + supressão ativa de up_food.
+        self._up_food_streak = 0
+        self._up_food_suppressed = 0
+
         # Tentativas consecutivas de fechar algo. Sobe a escada
         # de escalonamento em vez de repetir o que não funcionou.
         self._dismiss_attempts = 0
@@ -326,9 +339,9 @@ class StateMachine:
             if now - self._stale_warned > 5.0:
 
                 logger.warning(
-                    "Detecções com %.0f ms de atraso "
-                    "(máx %.0f ms) — não vou clicar. "
-                    "Detector lento demais?",
+                    "Detections %.0f ms late "
+                    "(max %.0f ms) — will not click. "
+                    "Detector too slow?",
                     lag * 1000,
                     MAX_DETECTION_AGE * 1000,
                 )
@@ -346,6 +359,43 @@ class StateMachine:
             self._new_point(detections)
 
         else:
+
+            # Painel sumiu sozinho: a contagem recomeça do zero
+            # na próxima vez que o up_food aparecer.
+            if self.state == NORMAL:
+                if any(
+                    d.get("category") == "up_food"
+                    for d in detections or []
+                ):
+                    self._up_food_streak += 1
+                    if (
+                        self._up_food_streak >= UPGRADE_FOOD_STUCK_UPDATES
+                        and self._up_food_suppressed <= 0
+                    ):
+                        self._up_food_suppressed = (
+                            UPGRADE_FOOD_SUPPRESS_UPDATES
+                        )
+                        self._up_food_streak = 0
+                        logger.warning(
+                            "up_food stuck open for %d updates "
+                            "in NORMAL (unresolvable panel?) — "
+                            "suppressing up_food for %d updates "
+                            "so other upgrades get a turn",
+                            UPGRADE_FOOD_STUCK_UPDATES,
+                            UPGRADE_FOOD_SUPPRESS_UPDATES,
+                        )
+                else:
+                    self._up_food_repeats = 0
+                    self._up_food_streak = 0
+                    self._up_food_suppressed = 0
+                if self._up_food_suppressed > 0:
+                    self._up_food_suppressed -= 1
+                    if self._up_food_suppressed == 0:
+                        # Supressão esgotada: up_food ganha uma
+                        # janela nova (streak zerado) antes de
+                        # poder ser suprimido de novo — alterna
+                        # entre o painel e os outros upgrades.
+                        self._up_food_streak = 0
 
             acted = self._apply_rules(
                 detections,
@@ -368,6 +418,17 @@ class StateMachine:
             start=1,
         ):
 
+            # Supressão ativa: pula up_food para que regras de
+            # prioridade menor (upgrades de outras estações)
+            # tenham a vez. A detecção continua rodando — é o
+            # que conta o streak e percebe quando o painel some.
+            if (
+                self.state == NORMAL
+                and category == "up_food"
+                and self._up_food_suppressed > 0
+            ):
+                continue
+
             detection = self._find(detections, category)
 
             if detection is None:
@@ -384,13 +445,13 @@ class StateMachine:
                 )
 
                 logger.debug(
-                    "%s prio %d/%d: %s -> %s | na tela: %s",
+                    "%s prio %d/%d: %s -> %s | on screen: %s",
                     self.state,
                     prioridade,
                     len(rules),
                     category,
                     action,
-                    na_tela or "nada",
+                    na_tela or "nothing",
                 )
 
             if action != "food":
@@ -412,6 +473,8 @@ class StateMachine:
 
         if not self._can_act():
             return False
+
+        action, detection = self._trap_guard(action, detection)
 
         action = self._escalate(action)
 
@@ -530,14 +593,14 @@ class StateMachine:
         self.cycle_count += 1
 
         logger.info(
-            "Ciclo %d fechado por '%s' em %s%s",
+            "Cycle %d closed by '%s' in %s%s",
             self.cycle_count,
             category,
             formata_duracao(duracao),
             (
-                f" (anterior {formata_duracao(self.cycle_last)})"
+                f" (previous {formata_duracao(self.cycle_last)})"
                 if self.cycle_last is not None
-                else " (contado desde o start)"
+                else " (counted since start)"
             ),
         )
 
@@ -581,6 +644,36 @@ class StateMachine:
             "acoes": sum(self.action_counts.values()),
         }
 
+    def _trap_guard(self, action, detection):
+        """NORMAL só: up_food que sobrevive a UPGRADE_FOOD_MAX_REPEATS presses cai para "dismiss" (HOLD em ponto fixo, sem detecção) por UPGRADE_FOOD_DISMISS_ROUNDS rodadas; depois o ciclo recomeça e o press ganha outra chance. Qualquer outra ação zera a contagem."""
+
+        if self.state != NORMAL or action != "upgrade_food":
+            self._up_food_repeats = 0
+
+            return action, detection
+
+        self._up_food_repeats += 1
+
+        if self._up_food_repeats <= UPGRADE_FOOD_MAX_REPEATS:
+            return action, detection
+
+        if self._up_food_repeats <= (
+            UPGRADE_FOOD_MAX_REPEATS + UPGRADE_FOOD_DISMISS_ROUNDS
+        ):
+            logger.warning(
+                "upgrade_food (up_food) survived %d presses in NORMAL — "
+                "dismissing instead (round %d/%d)",
+                UPGRADE_FOOD_MAX_REPEATS,
+                self._up_food_repeats - UPGRADE_FOOD_MAX_REPEATS,
+                UPGRADE_FOOD_DISMISS_ROUNDS,
+            )
+
+            return "dismiss", None
+
+        self._up_food_repeats = 0
+
+        return action, detection
+
     def _escalate(self, action):
         """Escada de fechamento: N tentativas no ponto fixo, depois rola até o fim e tenta de novo — o ponto pode ser o que ABRE o painel, então tocar nele às vezes reabre em vez de fechar; não há BACK neste jogo."""
 
@@ -606,9 +699,9 @@ class StateMachine:
         self._dismiss_rounds += 1
 
         logger.warning(
-            "'%s' não fechou em %d tentativas (rodada %d) — "
-            "rolando a tela até o fim para achar posição onde "
-            "o ponto seja seguro",
+            "'%s' did not close in %d attempts (round %d) — "
+            "scrolling the screen to the end to find a position "
+            "where the point is safe",
             action,
             DISMISS_ATTEMPTS_BEFORE_SCROLL,
             self._dismiss_rounds,
@@ -632,9 +725,9 @@ class StateMachine:
             return
 
         logger.warning(
-            "'%s' repetiu %d vezes seguidas em %s sem "
-            "resolver. Ponto de dispensa errado, ou falta "
-            "template para o que está na tela?",
+            "'%s' repeated %d times in a row in %s without "
+            "resolving. Wrong dismiss point, or missing "
+            "template for what is on screen?",
             action,
             self._repeat_count,
             self.state,
@@ -710,13 +803,13 @@ class StateMachine:
             ):
 
                 logger.debug(
-                    "%s: esperando frame que mostre o efeito "
-                    "de %s (falta %.0f ms)",
+                    "%s: waiting for frame showing the effect "
+                    "of %s (missing %.0f ms)",
                     self.state,
                     (
-                        "um swipe"
+                        "a swipe"
                         if self._last_was_swipe
-                        else "ação"
+                        else "action"
                     ),
                     (piso - self._frame_time) * 1000,
                 )
@@ -750,6 +843,9 @@ class StateMachine:
         # Trocar de estado é progresso: as contagens zeram.
         self._last_action = None
         self._repeat_count = 0
+        self._up_food_repeats = 0
+        self._up_food_streak = 0
+        self._up_food_suppressed = 0
         self._dismiss_attempts = 0
         self._dismiss_rounds = 0
 
@@ -770,7 +866,7 @@ class StateMachine:
             return False
 
         logger.warning(
-            "%s travado por %.1fs — voltando para NORMAL",
+            "%s stuck for %.1fs — returning to NORMAL",
             self.state,
             elapsed,
         )
@@ -844,7 +940,7 @@ class StateMachine:
             return
 
         logger.info(
-            "Nenhum up_food em %.1fs",
+            "No up_food in %.1fs",
             UP_FOOD_WAIT,
         )
 
@@ -874,8 +970,8 @@ class StateMachine:
             return
 
         logger.warning(
-            "'food' sem up_food em %d tentativas seguidas — "
-            "ignorando até o próximo swipe",
+            "'food' without up_food in %d consecutive attempts — "
+            "ignoring until the next swipe",
             FOOD_MAX_ATTEMPTS,
         )
 

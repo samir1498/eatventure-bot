@@ -230,6 +230,6 @@ def resolver(pedido=None):
 
     serial = escolher(seriais, pedido=pedido, perguntar=perguntar)
 
-    logger.info("Dispositivo: %s", serial)
+    logger.info("Device: %s", serial)
 
     return serial
