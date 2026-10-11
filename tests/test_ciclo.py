@@ -1,7 +1,7 @@
 """
-Testes do tempo corrido entre reformas: o único número do HUD que mede
-PROGRESSO. Contar ciclo errado faz o painel mentir sobre a coisa que
-ele existe para mostrar.
+Tests for elapsed time between renovations: the only HUD number measuring
+PROGRESS. Miscounting cycles makes the panel lie about the thing it
+exists to show.
 """
 
 import sys
@@ -20,7 +20,7 @@ log.setup("ERROR")
 
 
 class AcoesFalsas:
-    """`livre` desliga o aceite, para imitar worker ocupado."""
+    """`livre` disables acceptance, to mimic a busy worker."""
 
     def __init__(self):
 
@@ -64,19 +64,19 @@ def maquina():
 
     machine = sm.StateMachine(acoes)
 
-    # Sem cooldown os testes não precisam dormir.
+    # Without cooldown the tests don't need to sleep.
     machine.action_cooldown = 0.0
 
-    # A guarda de "só age sobre frame que mostre o efeito da ação" tem
-    # testes próprios em test_state_machine.py; aqui o assunto é a
-    # CONTAGEM de ciclos.
+    # The "only act on frames showing the action's effect" guard has
+    # its own tests in test_state_machine.py; here the subject is
+    # CYCLE counting.
     machine.action_settle = 0.0
 
     return machine, acoes
 
 
 def agir(machine, categoria):
-    """Um passo com essa detecção na tela, voltando a NORMAL."""
+    """One step with this detection on screen, returning to NORMAL."""
 
     machine.state = sm.NORMAL
 
@@ -84,7 +84,7 @@ def agir(machine, categoria):
 
 
 def test_comeca_em_zero_contando_do_start():
-    """Sem ciclo anterior o tempo corrido já vale: "8 min e não passou de restaurante" é informação."""
+    """With no previous cycle the elapsed time already counts: "8 min stuck at restaurant" is information."""
 
     machine, _ = maquina()
 
@@ -105,7 +105,7 @@ def test_build_fecha_ciclo():
 
     assert quantos == 1, quantos
 
-    # O ciclo anterior existe, e o corrido reiniciou.
+    # The previous cycle exists, and the elapsed timer restarted.
     assert ultimo is not None
     assert corrido < 0.5, corrido
 
@@ -113,7 +113,7 @@ def test_build_fecha_ciclo():
 
 
 def test_plane_tambem_fecha_ciclo():
-    """São as duas portas para RENOVATE: qualquer uma conta."""
+    """They are the two doors into RENOVATE: either one counts."""
 
     machine, _ = maquina()
 
@@ -148,7 +148,7 @@ def test_ultimo_ciclo_mede_o_intervalo():
 
 
 def test_upgrade_nao_fecha_ciclo():
-    """O contador é de REFORMA, não de ação: clicar em upgrade não é progresso."""
+    """The counter is for RENOVATIONS, not actions: clicking an upgrade is not progress."""
 
     machine, _ = maquina()
 
@@ -159,13 +159,13 @@ def test_upgrade_nao_fecha_ciclo():
 
 
 def test_acao_barrada_por_cooldown_nao_conta():
-    """`_apply_rules` acha o build, mas o cooldown barra: nenhum toque, nenhum ciclo."""
+    """`_apply_rules` finds the build, but cooldown blocks it: no tap, no cycle."""
 
     machine, acoes = maquina()
 
     machine.action_cooldown = 60.0
 
-    # Consome o cooldown com uma ação qualquer.
+    # Burns the cooldown with any action.
     agir(machine, "upgrade")
 
     antes = machine.cycle_stats()[2]
@@ -177,7 +177,7 @@ def test_acao_barrada_por_cooldown_nao_conta():
 
 
 def test_worker_ocupado_nao_conta():
-    """Mesmo caso pelo outro caminho: a ação foi tentada e o ActionManager recusou."""
+    """Same case through the other path: the action was attempted and the ActionManager refused."""
 
     machine, acoes = maquina()
 
@@ -188,7 +188,7 @@ def test_worker_ocupado_nao_conta():
 
     assert machine.cycle_stats()[2] == 0, machine.cycle_stats()
 
-    # E quando libera, conta uma vez.
+    # And once freed, it counts once.
     acoes.livre = True
 
     agir(machine, "build")
@@ -232,7 +232,7 @@ def test_formata_duracao():
 
 
 def test_formata_duracao_nao_estoura_com_negativo():
-    """Um None ou negativo vindo de cálculo errado não pode virar exceção no desenho do HUD."""
+    """A None or negative from a bad computation must not blow up HUD drawing."""
 
     assert formata_duracao(-5) == "0s"
 
@@ -254,15 +254,15 @@ def test_hud_desenha_o_ciclo():
         {"cycle": (127.0, 200.0, 3)},
     )
 
-    # Sem stats nada é escrito; com stats, pixels mudaram.
+    # Without stats nothing is drawn; with stats, pixels changed.
     assert not np.array_equal(limpo, com_ciclo)
 
 
 def test_hud_marca_travado():
     """
-    Vermelho quando o corrido passa de CYCLE_STALL_FACTOR vezes o ciclo
-    anterior. NUNCA vermelho sem ciclo anterior — sem referência,
-    "demorado" não quer dizer nada.
+    Red when elapsed exceeds CYCLE_STALL_FACTOR times the previous
+    cycle. NEVER red without a previous cycle — without a baseline,
+    "slow" means nothing.
     """
 
     import numpy as np
@@ -277,7 +277,7 @@ def test_hud_marca_travado():
 
         saida = detector.draw(frame.copy(), [], {"cycle": cycle})
 
-        # O HUD usa contorno preto + cor. Conta pixels de cada.
+        # The HUD uses a black outline + color. Count pixels of each.
         pixels = saida.reshape(-1, 3)
 
         return {
@@ -303,7 +303,7 @@ def test_hud_marca_travado():
     assert dentro["bad"] == 0, dentro
     assert fora["bad"] > 0, fora
 
-    # Sem ciclo anterior, nunca vermelho, mesmo com muito tempo.
+    # Without a previous cycle, never red, even after a long time.
     sem_referencia = pinta((99999.0, None, 0))
 
     assert sem_referencia["bad"] == 0, sem_referencia

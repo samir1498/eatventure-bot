@@ -12,8 +12,8 @@ sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "src"))
 
-# Sem output_dir, grava em tests/capture/ — nunca em
-# tests/images/, que são os fixtures da regressão.
+# Without output_dir, writes to tests/capture/ — never to
+# tests/images/, which hold the regression fixtures.
 from renumerar import proximo_numero, renumerar   # noqa: E402
 import selector_layout as layout                  # noqa: E402
 from capture.screen import ScreenCapture          # noqa: E402
@@ -34,9 +34,9 @@ WINDOW_NAME = "Template Selector"
 TEMPLATES_DIR = ROOT / "src" / "vision" / "templates"
 DEFAULT_TEMPLATES_DIR = TEMPLATES_DIR / "default"
 
-# Recorte manual vai SEMPRE para default/, em qualquer resolução: a pasta
-# da resolução é escrita só pelo bot. Por isso o nome carrega a resolução
-# em que o recorte foi tirado — é a procedência, não o destino.
+# Manual crops ALWAYS go to default/, at any resolution: the
+# resolution folder is written only by the bot. Hence the name carries the
+# resolution the crop was taken at — provenance, not destination.
 def _prefixo_resolucao(width, height):
     return f"{width}x{height}_"
 
@@ -44,21 +44,21 @@ def _prefixo_resolucao(width, height):
 class TemplateSelector:
 
     def __init__(self, serial=None):
-        # Mesma fonte que o bot usa em runtime: recortar de screencap dava
-        # template lossless que perde ~0.13 de confiança contra o frame
-        # H.264 que o detector de fato compara.
+        # Same source the bot uses at runtime: cropping from screencap produced a
+        # lossless template losing ~0.13 confidence against the H.264
+        # frame the detector actually compares.
         self.capture = ScreenCapture(serial=serial)
         self.image = None  # imagem original
-        self.display = None  # visualização reduzida
+        self.display = None  # downscaled view
         self.scale = 1.0
-        self.start_x = None  # coordenadas da imagem original, não da janela
+        self.start_x = None  # original-image coordinates, not window ones
         self.start_y = None
         self.end_x = None
         self.end_y = None
         self.selecting = False
 
-        # Raiz oculta: só existe para os diálogos (categoria/nome) terem
-        # onde se ancorar — a janela de seleção continua sendo a do cv2.
+        # Hidden root: only exists so the (category/name) dialogs have
+        # somewhere to anchor — the selection window is still cv2's.
         self._tk_root = tk.Tk()
         self._tk_root.withdraw()
 
@@ -95,7 +95,7 @@ class TemplateSelector:
         )
 
     def _janela(self):
-        """Tamanho máximo da janela, em pixels de tela."""
+        """Maximum window size, in screen pixels."""
 
         largura = SELECTOR_MAX_WIDTH
         altura = SELECTOR_MAX_HEIGHT
@@ -121,7 +121,7 @@ class TemplateSelector:
         )
 
     def _prepare_display(self):
-        """Calcula a escala; não altera a imagem original."""
+        """Computes the scale; does not alter the original image."""
 
         height, width = self.image.shape[:2]
 
@@ -146,7 +146,7 @@ class TemplateSelector:
         self._render()
 
     def _render(self):
-        """Monta a visualização: a imagem inteira, reduzida."""
+        """Builds the view: the whole image, downscaled."""
 
         height, width = self.image.shape[:2]
 
@@ -170,7 +170,7 @@ class TemplateSelector:
         flags,
         param
     ):
-        """Guarda coordenadas da imagem original, não da janela."""
+        """Stores original-image coordinates, not window ones."""
 
         if event == cv2.EVENT_LBUTTONDOWN:
 
@@ -243,7 +243,7 @@ class TemplateSelector:
             2
         )
 
-        # tamanho real do recorte (pixels do device), não o tamanho na tela
+        # real crop size (device pixels), not the on-screen size
         largura = abs(self.end_x - self.start_x)
         altura = abs(self.end_y - self.start_y)
 
@@ -316,7 +316,7 @@ class TemplateSelector:
             if key == 27:
                 break
 
-            # F5 no Windows retorna 116; 'r' é alternativa
+            # F5 on Windows returns 116; 'r' is the alternative
             if key == 116 or key == ord("r"):
 
                 print()
@@ -383,7 +383,7 @@ class TemplateSelector:
 
     def save_selection(self):
 
-        # coordenadas já vêm convertidas do mouse_callback; dividir pela escala de novo recortaria errado
+        # coordinates already arrive converted from mouse_callback; dividing by the scale again would crop wrong
         x1 = min(self.start_x, self.end_x)
         x2 = max(self.start_x, self.end_x)
 
@@ -411,8 +411,8 @@ class TemplateSelector:
 
             return
 
-        # O recorte nunca é reescalado, e nunca vai para a pasta de uma
-        # resolução: quem escreve lá é só o bot. Quem reescala é o detector.
+        # The crop is never rescaled, and never goes to a
+        # resolution folder: only the bot writes there. The detector rescales.
         prefixo = _prefixo_resolucao(width, height)
 
         category = self._select_category(crop)
@@ -443,8 +443,8 @@ class TemplateSelector:
 
         else:
 
-            # compacta a sequência antes de salvar: len(existing)+1 sobrescreveria
-            # em silêncio se houvesse lacuna (ex.: food com 17 arquivos indo até item_020)
+            # compact the sequence before saving: len(existing)+1 would silently
+            # overwrite on gaps (e.g. food with 17 files up to item_020)
             renomeados = renumerar(
                 category_dir,
                 aplicar=True
@@ -464,8 +464,8 @@ class TemplateSelector:
                         f"  {origem.name} -> {destino.name}"
                     )
 
-            # A numeração é única na categoria, não por prefixo: dois
-            # recortes de telas diferentes não podem virar item_001 os dois.
+            # Numbering is unique per category, not per prefix: two
+            # crops from different screens must not both become item_001.
             number = proximo_numero(category_dir)
 
             output_path = (
@@ -522,7 +522,7 @@ class TemplateSelector:
         print()
 
     def _food_output_path(self, category_dir, crop, prefixo):
-        """Food é nomeado pelo item, não por número — vários bots/estágios usam o mesmo template e o nome no arquivo ajuda a identificar qual é qual."""
+        """Food is named by item, not by number — several bots/stages share a template and the filename helps tell which is which."""
 
         name = self._ask_name("Nome do food", "Nome do item:", crop)
 
@@ -655,7 +655,7 @@ class TemplateSelector:
             self._prepare_display()
 
     def _get_categories(self):
-        """Categorias do default: toda pasta de resolução nasce com este mesmo conjunto como padrão."""
+        """Default categories: every resolution folder starts with this same set as default."""
 
         if not DEFAULT_TEMPLATES_DIR.exists():
             return []

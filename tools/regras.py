@@ -1,7 +1,7 @@
 """
-Mostra as prioridades da máquina de estados (derivadas da ordem das
-listas em core/state_machine.py) e confere regra sem template, ação
-inexistente e template sem regra — coisas que o runtime não avisa.
+Shows the state-machine priorities (derived from the list order in
+core/state_machine.py) and checks rules without templates, nonexistent
+actions, and templates without rules — things the runtime never warns about.
 
     python tools/regras.py
 """
@@ -34,8 +34,8 @@ from vision.detector import Detector              # noqa: E402
 
 ORDEM = [NORMAL, UPGRADE, RENOVATE, DELIVERY, HELPER, FOOD, NEW_POINT]
 
-# Estados cujas regras NÃO são aplicadas pela tabela: têm
-# handler próprio por causa da espera depois do press.
+# States whose rules are NOT applied by the table: they have
+# their own handler because of the wait after the press.
 HANDLER_PROPRIO = {FOOD, NEW_POINT}
 
 

@@ -1,4 +1,4 @@
-"""Grava dataset: frame, detecções (caixas+categoria), ação e resultado. Assíncrono com fila descartável."""
+"""Records dataset: frame, detections (boxes+category), action and outcome. Async with droppable queue."""
 
 import hashlib
 import json
@@ -32,14 +32,14 @@ from core.config import (
 logger = log.get("dataset")
 
 
-# Resultados possíveis de uma ação.
-CHANGED = "changed"        # o alvo saiu da tela: a ação pegou
-UNCHANGED = "unchanged"    # o alvo continua lá: não pegou
-UNKNOWN = "unknown"        # não chegou frame para julgar
+# Possible action outcomes.
+CHANGED = "changed"        # target left the screen: action landed
+UNCHANGED = "unchanged"    # target still there: missed
+UNKNOWN = "unknown"        # no frame arrived to judge
 
 
 class Sample:
-    """Amostra em construção: fica pendente entre a ação e o frame que mostra o efeito dela."""
+    """Sample under construction: stays pending between the action and the frame showing its effect."""
 
     __slots__ = (
         "id",
@@ -79,18 +79,18 @@ class DatasetRecorder:
             DATASET_DIR if directory is None else directory
         )
 
-        # Índice consultável (Postgres). None = só arquivos.
+        # Queryable index (Postgres). None = files only.
         self.store = store
 
         self.session = session or uuid.uuid4().hex
 
         self.enabled = enabled
 
-        # Destino é por resolução e decidido por amostra: o device pode
-        # trocar de resolução no meio da sessão (outro aparelho, rotação).
+        # Destination is per-resolution and decided per sample: the device may
+        # switch resolution mid-session (another handset, rotation).
         self.data_dir = self.root / layout.DATA_DIRNAME
 
-        # Fila limitada e descartável: o bot nunca espera o disco.
+        # Bounded droppable queue: the bot never waits on disk.
         self.queue = queue.Queue(maxsize=DATASET_QUEUE_SIZE)
 
         self.running = False
@@ -99,9 +99,9 @@ class DatasetRecorder:
         self.pending = None
         self.lock = threading.Lock()
 
-        # Corta amostragem de ação travada (medido: 35 amostras/30s repetindo a mesma tela).
-        # Dedup por conteúdo não serve aqui pois a tela anima sozinha; o que separa
-        # limpo é o RESULTADO (unchanged em sequência = travado).
+        # Cuts sampling of a stuck action (measured: 35 samples/30s repeating the same screen).
+        # Content dedup doesn't work here since the screen animates on its own; what cleanly
+        # separates it is the OUTCOME (unchanged in a row = stuck).
         self.unchanged_action = None
         self.unchanged_streak = 0
 
@@ -110,13 +110,13 @@ class DatasetRecorder:
         self.duplicates = 0
         self.by_action = {}
 
-        # Última negativa, para espaçá-las no TEMPO. Começa no
-        # passado para a primeira sair logo.
+        # Last negative, to space them in TIME. Starts in the
+        # past so the first one goes out right away.
         self.last_negative = 0.0
 
-        # Bytes já gravados nesta execução, para o teto de
-        # disco. Só conta o que esta sessão escreveu: varrer a
-        # pasta a cada amostra custaria I/O à toa.
+        # Bytes already written in this run, for the disk
+        # cap. Only counts what this session wrote: scanning the
+        # folder per sample would cost needless I/O.
         self.bytes_written = 0
 
         self.disk_warned = False
@@ -149,7 +149,7 @@ class DatasetRecorder:
         if not self.running:
             return
 
-        # Fecha a pendente com veredito UNKNOWN em vez de perdê-la.
+        # Closes the pending one with an UNKNOWN verdict instead of losing it.
         self._flush_pending(UNKNOWN, None)
 
         self.running = False
@@ -192,7 +192,7 @@ class DatasetRecorder:
         lag,
         cycle_count=0,
     ):
-        """Chamado quando uma ação SAIU de verdade. `click` está em coordenada do FRAME."""
+        """Called when an action was actually SENT. `click` is in FRAME coordinates."""
 
         if not self.running:
             return
@@ -206,7 +206,7 @@ class DatasetRecorder:
         if DATASET_MAX_SAMPLES and self.saved >= DATASET_MAX_SAMPLES:
             return
 
-        # A pendente anterior nunca recebeu veredito.
+        # The previous pending one never got a verdict.
         self._flush_pending(UNKNOWN, None)
 
         agora = time.monotonic()
@@ -218,12 +218,12 @@ class DatasetRecorder:
                 created=datetime.now(timezone.utc),
                 action_time=agora,
 
-                # Cópia própria: o frame do ScreenCapture não sobrevive além do loop.
+                # Own copy: the ScreenCapture frame doesn't survive past the loop.
                 frame=frame.copy(),
 
                 detections=list(detections or []),
 
-                # Miniatura do ANTES, para julgar ação sem alvo pela mudança de tela.
+                # BEFORE thumbnail, to judge target-less actions by screen change.
                 thumb=self._thumb(frame),
 
                 action=action,
@@ -236,8 +236,8 @@ class DatasetRecorder:
             )
 
     def observe(self, frame, detections, frame_time, state):
-        """Julga a ação pendente e, de vez em quando, recolhe uma amostra NEGATIVA
-        (tela sem alvo) — senão o detector aprende que sempre existe alvo."""
+        """Judges the pending action and, from time to time, collects a NEGATIVE sample
+        (target-less screen) — otherwise the detector learns a target always exists."""
 
         if not self.running:
             return
@@ -255,8 +255,8 @@ class DatasetRecorder:
         if pendente is None:
             return
 
-        # O frame precisa ser POSTERIOR à ação, senão não pode
-        # mostrar o efeito dela.
+        # The frame must be AFTER the action, otherwise it can't
+        # show its effect.
         if frame_time is None or frame_time <= pendente.action_time:
 
             espera = time.monotonic() - pendente.action_time
@@ -275,7 +275,7 @@ class DatasetRecorder:
         )
 
     def _julgar(self, pendente, frame, detections):
-        """Com alvo, julga se ele saiu da tela; sem alvo (swipe/scroll/dismiss), se a TELA mudou."""
+        """With a target, judges whether it left the screen; without a target (swipe/scroll/dismiss), whether the SCREEN changed."""
 
         if pendente.target is not None:
 
@@ -293,8 +293,8 @@ class DatasetRecorder:
         return CHANGED if mudou else UNCHANGED
 
     def _alvo_continua(self, pendente, detections):
-        """Checa categoria E posição — só categoria daria falso "continua" com
-        outra instância da mesma categoria em outro canto da tela (comum com comida)."""
+        """Checks category AND position — category alone would give a false "still there" with
+        another instance of the same category elsewhere on screen (common with food)."""
 
         alvo = pendente.target
 
@@ -343,9 +343,9 @@ class DatasetRecorder:
 
         agora = time.monotonic()
 
-        # Espaçadas no TEMPO, não sorteadas: observe() é chamada
-        # a cada passada do loop (~30x/s), e uma probabilidade
-        # por passada enche o disco.
+        # Spaced in TIME, not sampled: observe() is called
+        # every loop pass (~30x/s), and a per-pass probability
+        # would fill the disk.
         if agora - self.last_negative < DATASET_NEGATIVE_INTERVAL:
             return
 
@@ -384,7 +384,7 @@ class DatasetRecorder:
 
             self.dropped += 1
 
-            # Um aviso por bloco, não um por amostra.
+            # One warning per block, not one per sample.
             if self.dropped % 20 == 1:
 
                 logger.warning(
@@ -427,7 +427,7 @@ class DatasetRecorder:
         if frame is None:
             return
 
-        # Teto de disco: o bot roda horas sem ninguém olhando.
+        # Disk cap: the bot runs for hours with nobody watching.
         if (
             DATASET_MAX_DISK_MB
             and self.bytes_written >= DATASET_MAX_DISK_MB * 1_000_000
@@ -448,7 +448,7 @@ class DatasetRecorder:
 
             return
 
-        # Mesma ação dando unchanged repetidamente = bot preso; para de gravar a mesma tela.
+        # Same action repeatedly unchanged = bot stuck; stops recording the same screen.
         if sample.action and sample.outcome == UNCHANGED:
 
             if sample.action == self.unchanged_action:
@@ -478,7 +478,7 @@ class DatasetRecorder:
 
         else:
 
-            # Progresso (ou negativa): a contagem recomeça.
+            # Progress (or negative): the count restarts.
             self.unchanged_action = None
             self.unchanged_streak = 0
 
@@ -539,7 +539,7 @@ class DatasetRecorder:
 
         self.by_action[rotulo] = self.by_action.get(rotulo, 0) + 1
 
-        # Índice no banco é opcional; falha aqui não pode derrubar a gravação (JSONL é a fonte de verdade).
+        # Indexing in the database is optional; failure here must not break recording (JSONL is the source of truth).
         if self.store:
 
             try:
@@ -565,9 +565,9 @@ class DatasetRecorder:
             "session": self.session,
             "created_at": sample.created.isoformat(),
 
-            # Relativo à raiz DA RESOLUÇÃO: a pasta daquela resolução
-            # inteira pode ser movida, copiada ou apagada sem invalidar
-            # o índice dela nem o das outras.
+            # Relative to the RESOLUTION root: that resolution's whole folder
+            # can be moved, copied or deleted without invalidating
+            # its index or the others'.
             "image": str(
                 caminho.relative_to(shard).as_posix()
             ),
@@ -613,8 +613,8 @@ class DatasetRecorder:
 
             "cycle_count": sample.cycle_count,
 
-            # TODAS as detecções do frame, não só a que virou
-            # ação: as outras são rótulo grátis.
+            # ALL detections in the frame, not just the one that became
+            # an action: the rest are free labels.
             "boxes": [
                 {
                     "category": d["category"],
@@ -653,8 +653,8 @@ class DatasetRecorder:
         ).astype(np.int16)
 
     def _mudou(self, antes, depois):
-        """Mudança GRANDE é confiável: rolagem move 8.9-59.8 (medido) vs ruído de
-        animação abaixo de 5.8 — a distinção que a dedup por conteúdo não consegue fazer."""
+        """BIG change is reliable: scrolling moves 8.9-59.8 (measured) vs animation
+        noise below 5.8 — the distinction content dedup can't make."""
 
         if antes is None or depois is None:
             return None
@@ -664,7 +664,7 @@ class DatasetRecorder:
         )
 
     def _perceptual_hash(self, frame):
-        """Gravado só como metadado — não filtra aqui, é para dedup offline depois."""
+        """Recorded as metadata only — no filtering here, for offline dedup later."""
 
         pequeno = self._thumb(frame)
 
@@ -673,7 +673,7 @@ class DatasetRecorder:
         return "".join("1" if b else "0" for b in bits)
 
     def _sha256(self, caminho):
-        """Identidade exata do arquivo, para detectar duplicata entre sessões."""
+        """Exact file identity, to detect duplicates across sessions."""
 
         digest = hashlib.sha256()
 

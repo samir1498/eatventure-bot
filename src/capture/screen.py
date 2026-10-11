@@ -1,4 +1,4 @@
-"""ScreenCapture: stream H.264 do scrcpy-server, versioning, FPS cap."""
+"""ScreenCapture: scrcpy-server H.264 stream, versioning, FPS cap."""
 
 import random
 import socket
@@ -31,23 +31,23 @@ class ScreenCapture:
     SERVER_VERSION = SCRCPY_SERVER_VERSION
     SERVER_PATH = SCRCPY_SERVER_PATH
 
-    # Caminho no device, separado do que o scrcpy.exe usa.
+    # Path on the device, separate from what scrcpy.exe uses.
     DEVICE_JAR = SCRCPY_DEVICE_JAR
 
     PORT = SCRCPY_PORT
 
     def __init__(self, serial=None):
 
-        self.serial = serial  # Device; None = deixa adb decidir (requer 1 device)
+        self.serial = serial  # Device; None = let adb decide (requires 1 device)
 
         self.server_process = None
         self.socket = None
         self.codec = None
 
-        self.scid = 0  # Server instance ID (scrcpy_<id> em scrcpy 4.1+)
+        self.scid = 0  # Server instance ID (scrcpy_<id> in scrcpy 4.1+)
         self.socket_name = "scrcpy"
 
-        self.first_chunk = None  # Primeiro pedaço do stream (H.264 real, não descartável)
+        self.first_chunk = None  # First chunk of the stream (real H.264, not disposable)
 
         self.running = False
         self.capture_thread = None
@@ -55,28 +55,28 @@ class ScreenCapture:
         self.latest_frame = None
         self.latest_frame_time = 0.0
 
-        self.version = 0  # Incrementa a cada frame (permite detectar novidade)
+        self.version = 0  # Increments on each frame (lets callers detect novelty)
 
-        # Frames por segundo que o device está entregando.
+        # Frames per second the device is delivering.
         self.rate = RateMeter()
 
-        # Intervalo mínimo entre frames publicados (capping FPS)
+        # Minimum interval between published frames (FPS capping)
         self._min_interval = (
             1.0 / CAPTURE_MAX_FPS
             if CAPTURE_MAX_FPS
             else 0.0
         )
         self._published_at = 0.0
-        self.dropped = 0  # Frames descartados pelo teto
+        self.dropped = 0  # Frames dropped by the cap
 
         self.condition = threading.Condition()
 
     def start(self):
 
-        # Um scid novo por execução: o socket abstrato do
-        # servidor é "scrcpy_<scid>", e um id próprio garante
-        # que não colidimos com o espelho nem com sobras de
-        # execuções anteriores.
+        # A fresh scid per run: the server's abstract
+        # socket is "scrcpy_<scid>", and our own id ensures
+        # we do not collide with the mirror or leftovers from
+        # previous runs.
         self.scid = random.randint(0, 0x7FFFFFFF)
         self.socket_name = f"scrcpy_{self.scid:08x}"
 
@@ -153,7 +153,7 @@ class ScreenCapture:
             )
 
     def _connect(self, timeout):
-        """Conecta e aguarda primeiro pedaço válido (0 bytes = socket não existe ainda)."""
+        """Connects and waits for the first valid chunk (0 bytes = socket does not exist yet)."""
 
         deadline = time.monotonic() + timeout
 
@@ -177,7 +177,7 @@ class ScreenCapture:
                 time.sleep(0.15)
                 continue
 
-            # Distinção: 0 bytes = socket não existe; timeout = aguardando dados válidos
+            # Distinction: 0 bytes = socket missing; timeout = waiting for valid data
 
             morto = False
 
@@ -248,7 +248,7 @@ class ScreenCapture:
             ) and self.latest_frame is not None
 
     def _capture_loop(self):
-        # first_chunk é H.264 real, não descartável
+        # first_chunk is real H.264, not disposable
         pendente = self.first_chunk
 
         self.first_chunk = None
@@ -297,7 +297,7 @@ class ScreenCapture:
             if not self._decode(data):
                 break
 
-        # Acorda quem estiver esperando frame.
+        # Wake up anyone waiting for a frame.
         with self.condition:
 
             self.running = False
@@ -305,7 +305,7 @@ class ScreenCapture:
             self.condition.notify_all()
 
     def _decode(self, data):
-        """Retorna False quando o stream terminou (EOF)."""
+        """Returns False when the stream ended (EOF)."""
 
         try:
 
@@ -328,7 +328,7 @@ class ScreenCapture:
         return True
 
     def _publish(self, frame):
-        # Capping ANTES da conversão cara (YUV->BGR). Decodificação não é pulada (inter-frame)
+        # Capping BEFORE the expensive conversion (YUV->BGR). Decoding is not skipped (inter-frame)
         if self._min_interval:
 
             agora = time.monotonic()
@@ -349,7 +349,7 @@ class ScreenCapture:
         bgr = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
 
         with self.condition:
-            # Guarda só o frame mais novo (dataset recebe original, detector normaliza)
+            # Keep only the newest frame (dataset gets the original, detector normalizes)
             self.latest_frame = bgr
             self.latest_frame_time = time.monotonic()
 
@@ -360,7 +360,7 @@ class ScreenCapture:
         self.rate.tick()
 
     def get_frame(self, since_version=None, timeout=1.0):
-        """Retorna (frame, versão, timestamp). Com since_version, bloqueia até frame novo. Array é compartilhado."""
+        """Returns (frame, version, timestamp). With since_version, blocks until a new frame. Array is shared."""
 
         with self.condition:
 
@@ -391,7 +391,7 @@ class ScreenCapture:
         return self.rate.rate()
 
     def _adb(self, *args):
-        """Monta comando adb para device escolhido (sem -s, adb recusa com múltiplos devices)."""
+        """Builds the adb command for the chosen device (without -s, adb refuses with multiple devices)."""
 
         comando = [ADB_PATH]
 
@@ -403,7 +403,7 @@ class ScreenCapture:
 
     def _push_server(self):
 
-            # Verifica se o caminho do scrcpy-server está configurado e existe
+            # Check that the scrcpy-server path is configured and exists
             if not self.SERVER_PATH:
                 raise RuntimeError(
                     "scrcpy-server path not configured (empty SCRCPY_SERVER_PATH). "
@@ -454,7 +454,7 @@ class ScreenCapture:
             "/",
             "com.genymobile.scrcpy.Server",
             self.SERVER_VERSION,
-            f"scid={self.scid:08x}",  # Obrigatório: socket abstrato é scrcpy_<id>
+            f"scid={self.scid:08x}",  # Required: abstract socket is scrcpy_<id>
 
             "tunnel_forward=true",
 

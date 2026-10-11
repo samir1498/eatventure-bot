@@ -1,6 +1,6 @@
 """
 Dataset manager: list-sessions, delete-session, remove-session,
-list-orphans, move-orphans, delete-orphans. Usa DATASET_DIR de
+list-orphans, move-orphans, delete-orphans. Uses DATASET_DIR from
 src/core/config.py.
 
   python tools/dataset_manager.py list-sessions
@@ -187,7 +187,7 @@ def delete_session_images(jsonl_path: Path, session_id: str, yes=False, prune_in
 
 
 def remove_session(jsonl_path: Path, session_id: str, yes=False, dry_run=False, backup_images=False):
-    """Remove imagens e linhas do índice de uma session; sempre faz backup do índice antes de reescrever."""
+    """Removes a session's images and index lines; always backs up the index before rewriting."""
 
     to_remove = []
     lines_to_drop = set()

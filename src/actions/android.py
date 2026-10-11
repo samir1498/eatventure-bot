@@ -1,4 +1,4 @@
-"""Camada mais baixa: comandos adb no device. Falha transitória vira WARNING e devolve False, nunca derruba o bot."""
+"""Lowest layer: adb commands on the device. Transient failure becomes WARNING and returns False, never crashes the bot."""
 
 import re
 import subprocess
@@ -70,7 +70,7 @@ class AndroidActions:
         return result.stdout
 
     def battery(self, timeout=5.0):
-        """(porcentagem, carregando) ou None. Timeout curto: é HUD, melhor envelhecer que travar a thread."""
+        """(percentage, charging) or None. Short timeout: it is HUD, better to go stale than block the thread."""
 
         output = self._run(
             "shell",
@@ -97,8 +97,8 @@ class AndroidActions:
 
             level = int(campos["level"])
 
-            # A escala nem sempre é 100. Assumir que é daria
-            # "level 17" virando 17% num device de escala 255.
+            # Scale is not always 100. Assuming so would turn
+            # "level 17" into 17% on a scale-255 device.
             scale = int(campos.get("scale", 100)) or 100
 
         except (KeyError, ValueError):
@@ -107,9 +107,9 @@ class AndroidActions:
 
             return None
 
-        # status 2 = charging, 5 = full. As flags de energia
-        # cobrem o caso de estar plugado sem contar como
-        # 'charging' (bateria cheia, ou carga pausada).
+        # status 2 = charging, 5 = full. The power flags
+        # cover being plugged in without counting as
+        # 'charging' (full battery, or paused charging).
         carregando = campos.get("status") in ("2", "5") or any(
             campos.get(f"{fonte} powered") == "true"
             for fonte in ("AC", "USB", "Wireless", "Dock")
@@ -118,15 +118,15 @@ class AndroidActions:
         return round(level * 100.0 / scale), carregando
 
     def get_screen_size(self):
-        """Resolução real do device ('wm size'), usada para converter coordenada de frame em toque quando o stream vem reduzido."""
+        """Real device resolution ('wm size'), used to convert frame coordinates into taps when the stream comes scaled down."""
 
         output = self._run("shell", "wm", "size")
 
         if not output:
             return None
 
-        # Prefere "Override size" quando existe: é a
-        # resolução em uso.
+        # Prefer "Override size" when present: it is the
+        # resolution in use.
         match = None
 
         for line in output.splitlines():
@@ -163,7 +163,7 @@ class AndroidActions:
         ) is not None
 
     def tap_many(self, x, y, times, timeout=None):
-        """N toques em UM comando adb: N chamadas separadas pagavam spawn+JVM cada, passando de 1s com 5 toques."""
+        """N taps in ONE adb command: N separate calls each paid spawn+JVM, exceeding 1s with 5 taps."""
 
         vezes = max(1, int(times))
 
@@ -176,7 +176,7 @@ class AndroidActions:
             "shell",
             "; ".join([um] * vezes),
 
-            # O adb tem de sobreviver aos N toques.
+            # adb must outlive the N taps.
             timeout=(
                 timeout
                 if timeout is not None
@@ -185,7 +185,7 @@ class AndroidActions:
         ) is not None
 
     def swipe_many(self, x1, y1, x2, y2, times, duration=300):
-        """N swipes iguais em UM comando adb (mesmo motivo do tap_many)."""
+        """N identical swipes in ONE adb command (same reason as tap_many)."""
 
         vezes = max(1, int(times))
 
@@ -222,7 +222,7 @@ class AndroidActions:
             str(int(y)),
             str(duration_ms),
 
-            # O adb precisa sobreviver ao press inteiro.
+            # adb must outlive the whole press.
             timeout=duration + 5.0,
         ) is not None
 
@@ -251,7 +251,7 @@ class AndroidActions:
         ) is not None
 
     def focused_package(self, timeout=5.0):
-        """Pacote em primeiro plano (mFocusedApp), ou None se indeterminado. None = adb falhou: quem chama não deve presumir jogo fechado."""
+        """Foreground package (mFocusedApp), or None if undetermined. None = adb failed: callers must not assume the game is closed."""
 
         output = self._run(
             "shell",
@@ -272,7 +272,7 @@ class AndroidActions:
         return match.group(1) if match else None
 
     def launch_package(self, package, timeout=10.0):
-        """Traz o pacote para a frente via monkey (1 evento)."""
+        """Brings the package to the foreground via monkey (1 event)."""
 
         return self._run(
             "shell",
@@ -284,7 +284,7 @@ class AndroidActions:
         ) is not None
 
     def collapse_shade(self, timeout=5.0):
-        """Recolhe a gaveta de notificações se estiver aberta (inoffensivo se não estiver)."""
+        """Collapses the notification shade if open (harmless if not)."""
 
         return self._run(
             "shell",

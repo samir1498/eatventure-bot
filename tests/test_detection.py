@@ -1,8 +1,8 @@
 """
-Regressão de detecção: roda o detector em tests/images e compara com
-tests/golden/expectations.json (--update regrava; CONFIRA o diff antes de comitar).
-Imagem sem entrada no golden vira AVISO, não falha. Não use "screen.png" como
-fixture: é o nome que o template_selector sobrescreve.
+Detection regression: runs the detector on tests/images and compares with
+tests/golden/expectations.json (--update rewrites; REVIEW the diff before committing).
+Images with no golden entry become a WARNING, not a failure. Don't use "screen.png" as
+a fixture: that's the name template_selector overwrites.
 """
 
 import argparse
@@ -23,8 +23,8 @@ from vision.detector import Detector        # noqa: E402
 IMAGES_DIR = ROOT / "tests" / "images"
 GOLDEN_PATH = ROOT / "tests" / "golden" / "expectations.json"
 
-# Tolerâncias: o refino em dois estágios pode deslocar o
-# ponto em alguns pixels, e isso não é regressão.
+# Tolerances: two-stage refinement may shift the
+# point by a few pixels, and that is not a regression.
 POSITION_TOLERANCE = 10
 CONFIDENCE_TOLERANCE = 0.03
 

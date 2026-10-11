@@ -35,8 +35,8 @@ COR_OVERRIDE = (0, 255, 0)
 class DetectPreview:
 
     def __init__(self, serial=None):
-        # Mesma fonte que o bot: preview em cima de screencap mostrava uma
-        # confiança que o detector nunca vê no frame H.264 real.
+        # Same source as the bot: preview over screencap showed a
+        # confidence the detector never sees on the real H.264 frame.
         self.capture = ScreenCapture(serial=serial)
         self.detector = Detector()
         self.image = None
@@ -93,12 +93,12 @@ class DetectPreview:
         )
 
     def _label(self, detection):
-        """Categoria comum (box, close, ...) usa o nome da categoria; food usa o
-        nome do item. Sem override na resolução atual, prefixa com 'default_'."""
+        """Common category (box, close, ...) uses the category name; food uses the
+        item name. Without an override at the current resolution, prefixes with 'default_'."""
 
         if detection["category"] == "food":
-            # Nome-base: o prefixo de resolução do default é procedência,
-            # não faz parte do nome do item.
+            # Base name: the default's resolution prefix is provenance,
+            # not part of the item name.
             base = Detector._base_name(
                 detection["name"]
             ).removesuffix(".png")

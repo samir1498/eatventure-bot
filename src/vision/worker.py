@@ -1,4 +1,4 @@
-"""Worker thread: detector assíncrono com filtro de categorias, sem letterbox, espera bloqueante."""
+"""Worker thread: async detector with category filter, no letterbox, blocking wait."""
 
 import threading
 import time
@@ -21,43 +21,43 @@ class VisionWorker:
         self.running = False
         self.thread = None
 
-        # Inicializando para evitar AttributeError na primeira volta de _run
+        # Initialized to avoid AttributeError on the first _run loop
         self.latest_raw_frame = None
         self.latest_frame_time = 0.0
 
         self.detections = []
         self.detections_time = 0.0
 
-        # Frame que produziu as detecções acima. Não é o
-        # latest_frame: aquele já foi substituído.
+        # Frame that produced the detections above. Not
+        # latest_frame: that one was already replaced.
         self.detections_frame = None
 
         self.categories = None
 
-        # Frame novo acorda o worker (substitui busy-wait)
+        # New frame wakes the worker (replaces busy-wait)
         self.frame_lock = threading.Condition()
 
         self.detection_lock = threading.Lock()
 
-        # Última falha da thread, para o loop principal e o
-        # HUD poderem dizer POR QUE não há detecção.
+        # Last thread failure, so the main loop and the
+        # HUD can tell WHY there is no detection.
         self.last_error = None
         self._error_kinds = set()
 
-        # Frames anteriores a este timestamp são rejeitados (estabilização pós-ação)
+        # Frames older than this timestamp are rejected (post-action settling)
         self.frame_floor = 0.0
 
-        # Frames descartados por serem velhos demais para
-        # decidir. Para o HUD explicar um overlay parado.
+        # Frames dropped for being too old to
+        # decide on. Lets the HUD explain a frozen overlay.
         self.skipped_stale = 0
 
-        # Esperando a tela estabilizar depois de uma ação?
+        # Waiting for the screen to settle after an action?
         self.waiting_settle = False
 
-        # Custo real de uma passada, e quantas por segundo.
+        # Actual cost of one pass, and how many per second.
         #
-        # É o número que diz se o bot está enxergando rápido
-        # o bastante — não o FPS da captura.
+        # It's the number that tells whether the bot sees fast
+        # enough — not the capture FPS.
         self.last_duration = 0.0
 
         self.duration = DurationMeter()
@@ -90,7 +90,7 @@ class VisionWorker:
             self.thread = None
 
     def set_frame(self, frame, timestamp=None):
-        """Frame bruto sem processamento. Detector reescala templates por resolução."""
+        """Raw unprocessed frame. Detector rescales templates per resolution."""
 
         with self.frame_lock:
 
@@ -103,14 +103,14 @@ class VisionWorker:
             self.frame_lock.notify()
 
     def set_frame_floor(self, timestamp):
-        """Rejeita frames anteriores a este timestamp (estabilização pós-ação)."""
+        """Rejects frames older than this timestamp (post-action settling)."""
 
         with self.frame_lock:
 
             self.frame_floor = timestamp or 0.0
 
     def set_categories(self, categories):
-        """Restringe busca por categoria. Tupla preserva prioridade (ordem importa)."""
+        """Restricts search by category. Tuple preserves priority (order matters)."""
 
         with self.detection_lock:
 
@@ -121,7 +121,7 @@ class VisionWorker:
             )
 
     def get_input(self):
-        """Retorna (frame, detecções, timestamp) consistentes para dataset."""
+        """Returns consistent (frame, detections, timestamp) for dataset."""
 
         with self.detection_lock:
 
@@ -132,7 +132,7 @@ class VisionWorker:
             )
 
     def get_detections(self):
-        """Retorna (detecções, idade_em_segundos). Idade é do frame, não da consulta."""
+        """Returns (detections, age_in_seconds). Age is of the frame, not the query."""
 
         with self.detection_lock:
 
@@ -155,7 +155,7 @@ class VisionWorker:
         return self.duration.average()
 
     def is_alive(self):
-        """Thread da visão está viva? (detecção de morte silenciosa do worker)."""
+        """Is the vision thread alive? (silent worker death detection)."""
 
         return bool(
             self.running
@@ -164,7 +164,7 @@ class VisionWorker:
         )
 
     def _fail(self, error):
-        """Loga erro UMA vez por tipo (evita spam em laço rápido)."""
+        """Logs each error type ONCE (avoids spam in a fast loop)."""
 
         self.last_error = f"{type(error).__name__}: {error}"
 
@@ -180,7 +180,7 @@ class VisionWorker:
         )
 
     def _run(self):
-        """Worker protegido: erros são capturados para evitar morte silenciosa."""
+        """Guarded worker: errors are caught to avoid silent death."""
 
         while self.running:
 
@@ -192,25 +192,25 @@ class VisionWorker:
 
                 self._fail(error)
 
-                # Sem isto, um erro imediato viraria laço
-                # quente consumindo uma CPU inteira.
+                # Without this, an immediate error would become a
+                # hot loop consuming a whole CPU.
                 time.sleep(0.1)
 
     def _pass(self):
-        """Uma passada: aguarda frame novo, detecta, publica."""
-        # Descarta frames atrasados (só o mais novo interessa)
+        """One pass: waits for a new frame, detects, publishes."""
+        # Drops late frames (only the newest matters)
         with self.frame_lock:
 
             if self.latest_raw_frame is None:
 
-                # Dorme até chegar frame. O timeout é só para
-                # o self.running voltar a ser consultado.
+                # Sleeps until a frame arrives. The timeout only lets
+                # self.running be re-checked.
                 self.frame_lock.wait(0.2)
 
             raw_frame = self.latest_raw_frame
             frame_time = self.latest_frame_time
 
-            # Limpa para sinalizar que foi consumido.
+            # Clears to signal it was consumed.
             self.latest_raw_frame = None
 
             floor = self.frame_floor
@@ -218,7 +218,7 @@ class VisionWorker:
         if raw_frame is None:
             return
 
-        # Pula frame velho demais (mostra tela ANTES do efeito da ação anterior)
+        # Skips too-old frames (shows the screen BEFORE the previous action's effect)
         if floor and frame_time and frame_time <= floor:
 
             self.skipped_stale += 1

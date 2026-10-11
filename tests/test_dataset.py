@@ -1,7 +1,7 @@
 """
-Testes da gravação do dataset. Grava em pasta temporária, nunca em
-DATASET_DIR. Um rótulo errado aqui não dá erro nenhum — treina o modelo
-a clicar no lugar errado, e o defeito só aparece depois de horas de GPU.
+Dataset-recording tests. Records into a temp dir, never into
+DATASET_DIR. A wrong label here raises no error — it trains the model
+to click the wrong place, and the defect only shows after hours of GPU.
 """
 
 import json
@@ -37,11 +37,11 @@ log.setup("ERROR")
 
 
 def frame(valor=40, largura=1080, altura=2400):
-    """Frame com gradiente, para o hash de similaridade distinguir um do outro."""
+    """Frame with a gradient, so the similarity hash tells them apart."""
 
     img = np.full((altura, largura, 3), valor, np.uint8)
 
-    # Posição dependente do valor: dois frames diferentes não colidem no hash.
+    # Value-dependent position: two different frames never collide on the hash.
     y = (valor * 7) % (altura - 200)
 
     img[y:y + 180, 100:400] = 255 - valor
@@ -66,9 +66,9 @@ def deteccao(category, x=100, y=200, w=80, h=80, conf=0.97):
 
 class Gravador:
     """
-    Recorder num diretório temporário, já iniciado. Negativas DESLIGADAS
-    por padrão (intervalo 0): uma a mais mudaria o total nos testes de
-    contagem.
+    Recorder in a temp directory, already started. Negatives OFF
+    by default (interval 0): one extra would change the totals in the
+    counting tests.
     """
 
     def __init__(self, negativas=0.0):
@@ -102,7 +102,7 @@ class Gravador:
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def registros(self, espera=5.0):
-        """Lê o índice, esperando a thread drenar a fila."""
+        """Reads the index, waiting for the thread to drain the queue."""
 
         indice = self.dir / "samples.jsonl"
 
@@ -112,7 +112,7 @@ class Gravador:
 
             if self.rec.queue.empty() and indice.exists():
 
-                # Uma folga para a escrita terminar.
+                # Some slack for the write to finish.
                 time.sleep(0.05)
 
                 break
@@ -149,7 +149,7 @@ def test_grava_imagem_e_rotulo():
             cycle_count=2,
         )
 
-        # Frame posterior sem o alvo: a ação funcionou.
+        # Later frame without the target: the action worked.
         g.rec.observe(
             frame(51),
             [],
@@ -173,20 +173,20 @@ def test_grava_imagem_e_rotulo():
         assert r["cycle_count"] == 2
         assert r["detect_lag_ms"] == 400
 
-        # A imagem existe de verdade, no caminho anotado.
+        # The image really exists, at the noted path.
         caminho = g.dir / r["image"]
 
         assert caminho.exists(), r["image"]
 
         assert caminho.stat().st_size > 0
 
-        # O caminho é RELATIVO: mover a pasta não invalida o
-        # índice.
+        # The path is RELATIVE: moving the folder doesn't invalidate
+        # the index.
         assert not Path(r["image"]).is_absolute()
 
 
 def test_grava_todas_as_caixas_do_frame():
-    """O bot agiu em uma; o detector viu três — as outras são rótulo grátis."""
+    """The bot acted on one; the detector saw three — the others are free labels."""
 
     with Gravador() as g:
 
@@ -219,7 +219,7 @@ def test_grava_todas_as_caixas_do_frame():
 
         assert categorias == ["box", "food", "upgrade"]
 
-        # Exatamente uma marcada como a que virou ação.
+        # Exactly one marked as the one acted upon.
         agidas = [b for b in r["boxes"] if b["acted"]]
 
         assert len(agidas) == 1, agidas
@@ -230,7 +230,7 @@ def test_grava_todas_as_caixas_do_frame():
 
 
 def test_geometria_da_caixa_e_preservada():
-    """x/y/width/height são o rótulo de detecção: errar aqui treina o modelo a enquadrar errado."""
+    """x/y/width/height are the detection label: getting this wrong trains the model to frame wrong."""
 
     with Gravador() as g:
 
@@ -286,7 +286,7 @@ def test_resultado_changed_quando_o_alvo_sai():
 
 
 def test_resultado_unchanged_quando_o_alvo_fica():
-    """O rótulo que quebra o teto do behavior cloning: permite treinar só nas ações que funcionaram."""
+    """The label that breaks the behavior-cloning ceiling: allows training only on actions that worked."""
 
     with Gravador() as g:
 
@@ -303,7 +303,7 @@ def test_resultado_unchanged_quando_o_alvo_fica():
             lag=0.3,
         )
 
-        # Mesmo alvo, mesmo lugar: não pegou.
+        # Same target, same place: it didn't take.
         g.rec.observe(
             frame(91),
             [deteccao("box", x=302, y=1503)],
@@ -315,7 +315,7 @@ def test_resultado_unchanged_quando_o_alvo_fica():
 
 
 def test_outra_instancia_da_categoria_nao_conta_como_unchanged():
-    """Comparar só a categoria daria falso "não pegou" quando há outra comida em outro canto."""
+    """Comparing only the category would give a false "didn't take" when there's another food in another corner."""
 
     with Gravador() as g:
 
@@ -332,7 +332,7 @@ def test_outra_instancia_da_categoria_nao_conta_como_unchanged():
             lag=0.3,
         )
 
-        # Comida sim, mas do outro lado da tela.
+        # Food yes, but on the other side of the screen.
         g.rec.observe(
             frame(101),
             [deteccao("food", x=900, y=2000)],
@@ -344,7 +344,7 @@ def test_outra_instancia_da_categoria_nao_conta_como_unchanged():
 
 
 def test_frame_anterior_a_acao_nao_julga():
-    """Julgar por um frame de antes da ação produziria "unchanged" para toda ação que funcionou."""
+    """Judging by a pre-action frame would produce "unchanged" for every action that worked."""
 
     with Gravador() as g:
 
@@ -363,21 +363,21 @@ def test_frame_anterior_a_acao_nao_julga():
             lag=0.5,
         )
 
-        # Frame de ANTES: nada é gravado ainda.
+        # BEFORE frame: nothing recorded yet.
         g.rec.observe(frame(111), [], agora - 1.0, "NORMAL")
 
         assert g.rec.pending is not None
 
         assert g.registros(espera=0.3) == []
 
-        # Frame de depois: agora sim.
+        # After frame: now yes.
         g.rec.observe(frame(112), [], time.monotonic() + 1.0, "NORMAL")
 
         assert len(g.registros()) == 1
 
 
 def test_acao_sem_veredito_e_gravada_no_stop():
-    """Sessão terminando com ação pendente: a imagem e as caixas valem mesmo sem o resultado."""
+    """Session ending with a pending action: the image and boxes are worth it even without the verdict."""
 
     d = Path(tempfile.mkdtemp())
 
@@ -417,9 +417,9 @@ def test_acao_sem_veredito_e_gravada_no_stop():
 
 def test_todas_as_acoes_do_bot_entram():
     """
-    Ação que o bot faz e o dataset ignora é buraco que só aparece quando
-    o modelo não sabe fazer aquilo. Inclui `click` (build) e `plane`,
-    que ficavam de fora.
+    An action the bot takes but the dataset ignores is a hole that only shows when
+    the model can't do that thing. Includes `click` (build) and `plane`,
+    which used to be left out.
     """
 
     from actions.manager import ACTION_TABLE
@@ -429,13 +429,13 @@ def test_todas_as_acoes_do_bot_entram():
 
     assert not faltando, faltando
 
-    # E a exploração, que não passa por ACTION_TABLE.
+    # And exploration, which doesn't go through ACTION_TABLE.
     assert "swipe_up" in DATASET_ACTIONS
     assert "swipe_down" in DATASET_ACTIONS
 
 
 def test_acao_desconhecida_nao_grava():
-    """O filtro permite tirar uma ação do dataset sem tirar do bot."""
+    """The filter allows dropping an action from the dataset without dropping it from the bot."""
 
     with Gravador() as g:
 
@@ -493,12 +493,12 @@ def test_build_e_plane_agora_gravam():
 
 def test_bot_travado_para_de_gravar():
     """
-    Substitui a deduplicação por conteúdo, MEDIDA e descartada: a tela
-    anima sozinha, e a diferença de miniatura entre frames da mesma tela
-    (1.9-5.8) se sobrepõe à de telas distintas (2.5-59.8) — qualquer
-    limite jogaria fora amostra boa. O que separa limpo é o RESULTADO:
-    sessão travada = 35/35 unchanged na mesma ação; produtiva = open_box
-    5x seguidas, todas changed.
+    Replaces content-based dedup, MEASURED and discarded: the screen
+    animates on its own, and the thumbnail gap between frames of the same screen
+    (1.9-5.8) overlaps that of distinct screens (2.5-59.8) — any
+    threshold would throw away good samples. What separates cleanly is the VERDICT:
+    stuck session = 35/35 unchanged on the same action; productive = open_box
+    5x in a row, all changed.
     """
 
     from core.config import DATASET_MAX_UNCHANGED_STREAK
@@ -507,7 +507,7 @@ def test_bot_travado_para_de_gravar():
 
         alvo = deteccao("box", x=300, y=1500)
 
-        # 10 rodadas em que o alvo NUNCA sai: bot preso.
+        # 10 rounds where the target NEVER leaves: stuck bot.
         for indice in range(10):
 
             g.rec.on_action(
@@ -521,7 +521,7 @@ def test_bot_travado_para_de_gravar():
                 lag=0.3,
             )
 
-            # O mesmo alvo continua lá.
+            # The same target is still there.
             g.rec.observe(
                 frame(11 + indice * 7),
                 [deteccao("box", x=301, y=1501)],
@@ -540,7 +540,7 @@ def test_bot_travado_para_de_gravar():
 
 
 def test_repeticao_produtiva_grava_tudo():
-    """O que torna o corte seguro: abrir 5 caixas seguidas é progresso, não bot travado."""
+    """What makes the cut safe: opening 5 boxes in a row is progress, not a stuck bot."""
 
     with Gravador() as g:
 
@@ -559,7 +559,7 @@ def test_repeticao_produtiva_grava_tudo():
                 lag=0.3,
             )
 
-            # O alvo saiu: a caixa abriu.
+            # The target left: the box opened.
             g.rec.observe(
                 frame(21 + indice * 9),
                 [],
@@ -575,7 +575,7 @@ def test_repeticao_produtiva_grava_tudo():
 
 
 def test_contagem_zera_ao_mudar_de_acao():
-    """Preso numa ação não pode calar as outras."""
+    """Stuck on one action must not silence the others."""
 
     from core.config import DATASET_MAX_UNCHANGED_STREAK
 
@@ -583,7 +583,7 @@ def test_contagem_zera_ao_mudar_de_acao():
 
         alvo = deteccao("box", x=300, y=1500)
 
-        # Estoura a contagem em open_box.
+        # Blows the count on open_box.
         for indice in range(6):
 
             g.rec.on_action(
@@ -606,7 +606,7 @@ def test_contagem_zera_ao_mudar_de_acao():
 
         antes = len(g.registros())
 
-        # Outra ação, também unchanged: tem de gravar.
+        # Another action, also unchanged: must record.
         outro = deteccao("food", x=700, y=900)
 
         g.rec.on_action(
@@ -635,7 +635,7 @@ def test_contagem_zera_ao_mudar_de_acao():
 
 
 def test_telas_diferentes_nao_sao_descartadas():
-    """Nenhuma amostra produtiva é perdida por semelhança de imagem — não há mais filtro por conteúdo."""
+    """No productive sample is lost to image similarity — there's no content filter anymore."""
 
     with Gravador() as g:
 
@@ -665,7 +665,7 @@ def test_telas_diferentes_nao_sao_descartadas():
 
 
 def test_fila_cheia_descarta_sem_travar():
-    """A garantia que mais importa: o bot NUNCA espera o disco."""
+    """The guarantee that matters most: the bot NEVER waits on disk."""
 
     d = Path(tempfile.mkdtemp())
 
@@ -673,7 +673,7 @@ def test_fila_cheia_descarta_sem_travar():
 
         rec = DatasetRecorder(directory=d)
 
-        # Sem start(): a thread não consome, a fila enche.
+        # Without start(): the thread doesn't consume, the queue fills.
         rec.running = True
 
         alvo = deteccao("box")
@@ -706,8 +706,8 @@ def test_fila_cheia_descarta_sem_travar():
 
         assert rec.dropped > 0, "a fila deveria ter enchido"
 
-        # Não pode ter bloqueado: 200 chamadas em muito menos
-        # que um segundo.
+        # Must not have blocked: 200 calls in far less
+        # than a second.
         assert gasto < 2.0, gasto
 
     finally:
@@ -750,7 +750,7 @@ class AcoesFalsas:
 
 
 def test_maquina_de_estados_grava_a_acao():
-    """Fim a fim: a máquina age e a amostra aparece no disco, com o clique no espaço da imagem."""
+    """End to end: the machine acts and the sample lands on disk, with the click in image space."""
 
     with Gravador() as g:
 
@@ -770,7 +770,7 @@ def test_maquina_de_estados_grava_a_acao():
 
         assert acoes.executadas == ["open_box"], acoes.executadas
 
-        # Frame posterior sem o alvo.
+        # Later frame without the target.
         machine.update([], 0.1, frame(151), time.monotonic() + 1.0)
 
         regs = g.registros()
@@ -781,12 +781,12 @@ def test_maquina_de_estados_grava_a_acao():
 
         assert r["action"] == "open_box"
 
-        # Centro da caixa: 300 + 96//2, 1500 + 88//2
+        # Box center: 300 + 96//2, 1500 + 88//2
         assert (r["click_x"], r["click_y"]) == (348, 1544), r
 
 
 def test_click_do_dismiss_usa_o_ponto_neutro():
-    """Ação de ponto fixo: o rótulo é o ponto neutro no espaço do frame, não o centro da detecção."""
+    """Fixed-point action: the label is the neutral point in frame space, not the detection center."""
 
     with Gravador() as g:
 
@@ -809,12 +809,12 @@ def test_click_do_dismiss_usa_o_ponto_neutro():
         assert r["action"] == "gray_max"
         assert r["action_kind"] == "dismiss"
 
-        # Frame == referência, então o ponto é o próprio.
+        # Frame == reference, so the point is itself.
         assert (r["click_x"], r["click_y"]) == DISMISS_POINT, r
 
 
 def test_ponto_neutro_escala_em_frame_menor():
-    """Se o frame vier reduzido, o rótulo tem de escalar com ele — a imagem gravada é o frame."""
+    """If the frame comes shrunk, the label must scale with it — the recorded image is the frame."""
 
     with Gravador() as g:
 
@@ -863,9 +863,9 @@ def test_ponto_neutro_escala_em_frame_menor():
 
 def test_rotulo_bate_com_o_toque_real():
     """
-    O rótulo (target_frame) e o toque (_dispatch) são calculados por
-    caminhos diferentes de propósito — o toque não passa pelo frame, para
-    não acumular arredondamento. Este teste garante que os dois concordam.
+    The label (target_frame) and the tap (_dispatch) are computed on
+    deliberately different paths — the tap doesn't go through the frame, to
+    avoid stacking rounding. This test ensures both agree.
     """
 
     from actions.manager import ActionManager
@@ -877,14 +877,14 @@ def test_rotulo_bate_com_o_toque_real():
 
     alvo = deteccao("box", x=317, y=1523, w=96, h=88)
 
-    # Ação com alvo: centro da caixa.
+    # Targeted action: box center.
     ponto = manager.target_frame("open_box", alvo)
 
     assert ponto == (317 + 48, 1523 + 44), ponto
 
     assert manager._from_frame(*ponto) == ponto
 
-    # Ação de ponto fixo: o ponto neutro.
+    # Fixed-point action: the neutral point.
     for acao in ("gray_max", "dismiss"):
 
         rotulo = manager.target_frame(acao, alvo)
@@ -893,14 +893,14 @@ def test_rotulo_bate_com_o_toque_real():
 
         assert rotulo == toque, (acao, rotulo, toque)
 
-    # Scroll não tem alvo pontual.
+    # Scroll has no point target.
     assert manager.target_frame("scroll_bottom", alvo) is None
 
 
 def test_negativas_sao_gravadas():
-    """Um detector treinado só em telas com alvo aprende que sempre existe um alvo."""
+    """A detector trained only on screens with a target learns there's always a target."""
 
-    # Intervalo minúsculo: cada observe() gera uma negativa.
+    # Tiny interval: each observe() yields a negative.
     with Gravador(negativas=0.0001) as g:
 
         for valor in (10, 70, 130):
@@ -924,7 +924,7 @@ def test_negativas_sao_gravadas():
 
 
 def test_sem_recorder_a_maquina_funciona_igual():
-    """O dataset é opcional: recorder=None não pode mudar nada no comportamento do bot."""
+    """The dataset is optional: recorder=None must change nothing about bot behavior."""
 
     acoes = AcoesFalsas()
 
@@ -934,16 +934,16 @@ def test_sem_recorder_a_maquina_funciona_igual():
     machine.action_settle = 0.0
     machine.last_action_time = 0.0
 
-    machine.update([deteccao("open_store")], 0.1, frame(180), time.monotonic())
+    machine.update([deteccao("box")], 0.1, frame(180), time.monotonic())
 
-    assert acoes.executadas == ["open_store_click"], acoes.executadas
+    assert acoes.executadas == ["open_box"], acoes.executadas
 
 
 def test_swipe_de_exploracao_e_gravado():
     """
-    A exploração não passa por _act, então precisava de gancho próprio.
-    A direção vai no NOME porque subir/descer são rótulos diferentes para
-    o treino, e assim não precisa de coluna nova no índice nem no banco.
+    Exploration doesn't go through _act, so it needed its own hook.
+    The direction goes in the NAME because up/down are different labels for
+    training, and that way no new column is needed in the index or the DB.
     """
 
     with Gravador() as g:
@@ -956,7 +956,7 @@ def test_swipe_de_exploracao_e_gravado():
         machine.action_settle = 0.0
         machine.last_action_time = 0.0
 
-        # Tela vazia e tempo de exploração vencido.
+        # Empty screen with exploration time expired.
         machine.explore_anchor = (
             time.monotonic()
             - machine.exploration_interval()
@@ -965,7 +965,7 @@ def test_swipe_de_exploracao_e_gravado():
 
         machine.update([], 0.1, frame(190), time.monotonic())
 
-        # Frame bem diferente: a rolagem funcionou.
+        # Very different frame: the scroll worked.
         machine.update(
             [],
             0.1,
@@ -985,7 +985,7 @@ def test_swipe_de_exploracao_e_gravado():
         assert r["action"] in ("swipe_up", "swipe_down"), r["action"]
         assert r["action_kind"] == "swipe", r["action_kind"]
 
-        # Swipe não é toque pontual.
+        # Swipe is not a point tap.
         assert r["click_x"] is None
         assert r["click_y"] is None
 
@@ -994,9 +994,9 @@ def test_swipe_de_exploracao_e_gravado():
 
 def test_acao_sem_alvo_julga_pela_mudanca_de_tela():
     """
-    Para swipe/scroll/dismiss não existe "o alvo saiu da tela" — a
-    pergunta é se a ação surtiu efeito. Detectar mudança GRANDE é
-    confiável (rolagem move a vista inteira).
+    For swipe/scroll/dismiss there's no "target left the screen" — the
+    question is whether the action had an effect. Detecting a LARGE change is
+    reliable (scrolling moves the whole view).
     """
 
     import numpy as np
@@ -1005,7 +1005,7 @@ def test_acao_sem_alvo_julga_pela_mudanca_de_tela():
 
         antes = frame(60)
 
-        # Tela COMPLETAMENTE diferente.
+        # COMPLETELY different screen.
         depois = np.full_like(antes, 220)
 
         g.rec.on_action(
@@ -1041,7 +1041,7 @@ def test_acao_sem_alvo_com_tela_parada_e_unchanged():
             lag=0.3,
         )
 
-        # Exatamente o mesmo frame: nada mudou.
+        # Exactly the same frame: nothing changed.
         g.rec.observe(
             antes.copy(),
             [],
@@ -1053,7 +1053,7 @@ def test_acao_sem_alvo_com_tela_parada_e_unchanged():
 
 
 def test_registro_tem_as_chaves_que_o_banco_espera():
-    """O store faz INSERT posicional; chave faltando viraria KeyError silencioso na thread de gravação."""
+    """The store does a positional INSERT; a missing key would become a silent KeyError on the writer thread."""
 
     esperadas = {
         "id", "session", "created_at",
@@ -1091,7 +1091,7 @@ def test_registro_tem_as_chaves_que_o_banco_espera():
 
         assert not faltando, faltando
 
-        # E as caixas têm o que a tabela de caixas espera.
+        # And the boxes carry what the boxes table expects.
         caixa_esperada = {
             "category", "template", "confidence",
             "color_similarity", "x", "y",
@@ -1102,7 +1102,7 @@ def test_registro_tem_as_chaves_que_o_banco_espera():
 
 
 def test_sha256_confere_com_o_arquivo():
-    """O hash detecta duplicata entre sessões e confere integridade — errado é pior que ausente."""
+    """The hash detects duplicates across sessions and verifies integrity — a wrong one is worse than missing."""
 
     import hashlib
 
@@ -1135,9 +1135,9 @@ def test_sha256_confere_com_o_arquivo():
 
 def test_grava_em_jpg():
     """
-    Antes deste teste nenhum outro exercitava o caminho JPG (todos no
-    padrão PNG). JPG é 4.3x menor (0.49 MB vs 2.10 MB/frame) — numa sessão
-    de horas, 1.8 vs 7.6 GB/hora.
+    Before this test no other exercised the JPG path (all on the
+    PNG default). JPG is 4.3x smaller (0.49 MB vs 2.10 MB/frame) — over an
+    hours-long session, 1.8 vs 7.6 GB/hour.
     """
 
     import dataset.recorder as mod
@@ -1178,7 +1178,7 @@ def test_grava_em_jpg():
 
             assert caminho.exists()
 
-            # Relê: extensão certa não garante arquivo válido.
+            # Re-reads: the right extension doesn't guarantee a valid file.
             import cv2
 
             lido = cv2.imread(str(caminho))
@@ -1187,7 +1187,7 @@ def test_grava_em_jpg():
 
             assert lido.shape[:2] == (2400, 1080), lido.shape
 
-            # O hash tem de ser dos bytes do JPG, não de outra coisa.
+            # The hash must be of the JPG bytes, not something else.
             import hashlib
 
             assert (
@@ -1202,11 +1202,11 @@ def test_grava_em_jpg():
 
 def test_jpg_e_bem_menor_que_png():
     """
-    Usa FIXTURE REAL de propósito: com frame sintético a conta se INVERTE
-    (cor lisa comprime a quase nada no PNG; JPG paga custo de base). A
-    margem depende da ORIGEM: adb screencap (este fixture) é 1.8x menor,
-    H.264 decodificado (o caso real, gravado pelo recorder) é 4.3x — por
-    isso a afirmação aqui é só "menor", não um fator.
+    Uses a REAL fixture on purpose: with a synthetic frame the math FLIPS
+    (flat color compresses to nearly nothing in PNG; JPG pays a base cost). The
+    margin depends on the SOURCE: adb screencap (this fixture) is 1.8x smaller,
+    decoded H.264 (the real case, recorded by the recorder) is 4.3x — so
+    the claim here is just "smaller", not a factor.
     """
 
     import cv2
@@ -1263,10 +1263,10 @@ def test_jpg_e_bem_menor_que_png():
 
 class CursorFalso:
     """
-    Captura os SQL e as tuplas, sem servidor. Sob teste: a correspondência
-    COLUNA -> VALOR — o INSERT é posicional com 21 valores, e uma troca de
-    ordem faria click_x entrar em frame_width EM SILÊNCIO (o banco aceita,
-    ambos inteiros; o defeito só apareceria no treino).
+    Captures the SQL and tuples, no server. Under test: the COLUMN -> VALUE
+    mapping — the INSERT is positional with 21 values, and a swapped
+    order would put click_x into frame_width IN SILENCE (the DB accepts,
+    both ints; the defect would only show in training).
     """
 
     def __init__(self, conexao):
@@ -1321,10 +1321,10 @@ class ConexaoFalsa:
     def close(self):
         self.fechada = True
 
-    # ---- conveniências para os testes ----
+    # ---- test conveniences ----
 
     def por_tabela(self, tabela):
-        """As chamadas que mexem nesta tabela."""
+        """The calls touching this table."""
 
         return [
             c for c in self.chamadas
@@ -1332,7 +1332,7 @@ class ConexaoFalsa:
         ]
 
     def colunas(self, sql):
-        """Nomes das colunas do INSERT, na ordem em que aparecem."""
+        """INSERT column names, in the order they appear."""
 
         import re
 
@@ -1345,7 +1345,7 @@ class ConexaoFalsa:
         ]
 
     def linhas(self, tabela):
-        """[{coluna: valor}] das linhas inseridas na tabela — é aqui que a ordem posicional é conferida."""
+        """[{column: value}] of rows inserted into the table — this is where the positional order is checked."""
 
         resultado = []
 
@@ -1433,11 +1433,11 @@ def registro_exemplo(indice=0, sessao="sessao-1"):
 
 def test_cada_coluna_recebe_o_campo_certo():
     """
-    O teste que justifica todo este arquivo.
+    The test justifying this whole file.
 
-    INSERT posicional com 21 valores: se a ordem da tupla não
-    corresponder à das colunas, os dados entram trocados e o
-    banco aceita, porque os tipos são compatíveis.
+    Positional INSERT with 21 values: if the tuple order doesn't
+    match the columns, data goes in swapped and the
+    DB accepts it, because the types are compatible.
     """
 
     store, conexao = store_falso(batch_size=1)
@@ -1474,7 +1474,7 @@ def test_cada_coluna_recebe_o_campo_certo():
         "outcome_after_ms": 910,
         "cycle_count": 3,
 
-        # Desnormalizado: len(boxes).
+        # Denormalized: len(boxes).
         "box_count": 2,
     }
 
@@ -1516,7 +1516,7 @@ def test_caixas_vao_com_a_geometria_certa():
 
 
 def test_sessao_inserida_uma_vez_so():
-    """Sem isto, cada lote tentaria registrar a sessão de novo — ida ao banco à toa por lote, por horas."""
+    """Without this, each batch would try to register the session again — a wasted DB trip per batch, for hours."""
 
     store, conexao = store_falso(batch_size=1)
 
@@ -1528,14 +1528,14 @@ def test_sessao_inserida_uma_vez_so():
 
     assert len(sessoes) == 1, sessoes
 
-    # E duas sessões distintas geram dois registros.
+    # And two distinct sessions yield two records.
     store.insert(registro_exemplo(9, sessao="sessao-2"))
 
     assert len(conexao.por_tabela("dataset_session")) == 2
 
 
 def test_lote_espera_o_batch_size():
-    """Uma ida ao banco por amostra colocaria latência de rede na thread que também codifica a imagem."""
+    """One DB trip per sample would put network latency on the thread that also encodes the image."""
 
     store, conexao = store_falso(batch_size=3)
 
@@ -1552,7 +1552,7 @@ def test_lote_espera_o_batch_size():
 
 
 def test_close_grava_o_resto():
-    """O último lote quase nunca fecha o batch_size; sem flush no close, ele se perderia no banco."""
+    """The last batch almost never fills batch_size; without a flush on close, it would be lost from the DB."""
 
     store, conexao = store_falso(batch_size=100)
 
@@ -1570,9 +1570,9 @@ def test_close_grava_o_resto():
 
 def test_falha_faz_rollback_e_propaga():
     """
-    Sem rollback, a conexão fica inutilizável para todo lote seguinte
-    (Postgres aborta a transação). A exceção tem de PROPAGAR: o recorder
-    conta com isso para logar e seguir gravando em arquivo.
+    Without rollback, the connection stays unusable for every following batch
+    (Postgres aborts the transaction). The exception must PROPAGATE: the recorder
+    relies on it to log and keep writing to file.
     """
 
     store, conexao = store_falso(batch_size=1)
@@ -1595,7 +1595,7 @@ def test_falha_faz_rollback_e_propaga():
 
 
 def test_recorder_sobrevive_a_falha_do_banco():
-    """Fim a fim: banco quebrado, arquivo gravado."""
+    """End to end: broken DB, file written."""
 
     class StoreQuebrado:
 
@@ -1662,7 +1662,7 @@ def test_recorder_sobrevive_a_falha_do_banco():
 
 
 def test_importar_jsonl():
-    """O caminho recomendado: gravar em arquivo agora, carregar no banco depois, inclusive sessões antigas."""
+    """The recommended path: record to file now, load into the DB later, including old sessions."""
 
     import shutil
     import tempfile
@@ -1712,14 +1712,14 @@ def test_importar_jsonl():
 
     assert len(conexao.linhas("dataset_sample")) == 5
 
-    # 2 caixas por amostra.
+    # 2 boxes per sample.
     assert len(conexao.linhas("dataset_box")) == 10
 
     assert conexao.fechada
 
 
 def test_schema_configuravel_aparece_no_sql():
-    """Quem usa schema próprio precisa que ele chegue no SQL."""
+    """Anyone on their own schema needs it to reach the SQL."""
 
     from dataset.store import PostgresStore
 
@@ -1743,10 +1743,10 @@ def test_schema_configuravel_aparece_no_sql():
 
 def test_ddl_cobre_as_colunas_do_insert():
     """
-    O DDL vive em docs/schema.sql, fora do alcance do interpretador —
-    sem isto, código e script podem divergir e o sintoma é a PRIMEIRA
-    execução com banco falhando na cara do usuário. Confere contra o
-    .sql, não o .md, porque é o .sql que se EXECUTA.
+    The DDL lives in docs/schema.sql, out of the interpreter's reach —
+    without this, code and script can diverge and the symptom is the FIRST
+    run with a DB failing in the user's face. Checks against the
+    .sql, not the .md, because the .sql is what EXECUTES.
     """
 
     import re

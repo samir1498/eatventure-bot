@@ -1,11 +1,11 @@
 """
-Compacta a numeração dos templates: item_001..item_NNN, sem lacunas
-(lacuna deixa o "próximo número" ambíguo). Por padrão só mostra, pois
-renomear é irreversível; processa em ordem crescente para nunca
-sobrescrever, e pula com aviso se o destino já existir.
+Compacts template numbering: item_001..item_NNN, no gaps
+(a gap leaves the "next number" ambiguous). Dry-runs by default, since
+renaming is irreversible; processes in ascending order to never
+overwrite, and skips with a warning if the destination exists.
 
-    python tools/renumerar.py              # mostra o que mudaria
-    python tools/renumerar.py --aplicar    # renomeia
+    python tools/renumerar.py              # shows what would change
+    python tools/renumerar.py --aplicar    # renames
     python tools/renumerar.py --aplicar --categoria food
 """
 
@@ -18,15 +18,15 @@ ROOT = Path(__file__).resolve().parent.parent
 
 TEMPLATES_DIR = ROOT / "src" / "vision" / "templates"
 
-# O nome pode trazer a resolução em que o recorte foi tirado
-# ("1080x2400_item_001.png"): em default/ isso é procedência, já que ele
-# recebe recorte de telas diferentes. O prefixo é preservado no rename — a
-# numeração é única dentro da categoria, independente de prefixo.
+# The name may carry the resolution the crop was taken at
+# ("1080x2400_item_001.png"): in default/ that is provenance, since it
+# receives crops from different screens. The prefix is preserved on rename — the
+# numbering is unique within the category, regardless of prefix.
 NUMERADO = re.compile(r"^(?:(\d+x\d+)_)?item_(\d+)$")
 
 
 def _partes(path):
-    """(prefixo pronto para concatenar, número), ou None se não for item numerado."""
+    """(prefix ready to concatenate, number), or None if not a numbered item."""
 
     casou = NUMERADO.match(path.stem)
 
@@ -42,7 +42,7 @@ def _partes(path):
 
 
 def numerados(category_dir):
-    """[(numero, caminho)] dos item_NNN.png, com ou sem prefixo, em ordem crescente."""
+    """[(number, path)] of item_NNN.png, with or without prefix, in ascending order."""
 
     encontrados = []
 
@@ -54,15 +54,15 @@ def numerados(category_dir):
 
             encontrados.append((partes[1], path))
 
-    # Nome desempata: dois prefixos podem trazer o mesmo número, e sem
-    # critério estável a ordem viria da pasta e o plano mudaria a cada run.
+    # Name breaks ties: two prefixes may bring the same number, and without
+    # a stable criterion the order would come from the folder and the plan would change on every run.
     encontrados.sort(key=lambda item: (item[0], item[1].name))
 
     return encontrados
 
 
 def planejar(category_dir):
-    """[(origem, destino)] para deixar a sequência contígua; vazio = já compacta."""
+    """[(source, destination)] to make the sequence contiguous; empty = already compact."""
 
     mudancas = []
 
@@ -87,7 +87,7 @@ def planejar(category_dir):
 
 
 def renumerar(category_dir, aplicar=False, log=print):
-    """Compacta a categoria; devolve as mudanças realizadas (ou planejadas, se aplicar=False)."""
+    """Compacts the category; returns the changes made (or planned, if aplicar=False)."""
 
     mudancas = planejar(category_dir)
 
@@ -115,7 +115,7 @@ def renumerar(category_dir, aplicar=False, log=print):
 
 
 def proximo_numero(category_dir):
-    """Número do próximo template, assumindo a sequência já compacta: len + 1."""
+    """Next template number, assuming the sequence is already compact: len + 1."""
 
     return len(numerados(category_dir)) + 1
 
@@ -148,8 +148,8 @@ def main():
 
         return 1
 
-    # TEMPLATES_DIR/default/<categoria> e TEMPLATES_DIR/<resolucao>/<categoria> —
-    # duas camadas, não uma: o grupo (default ou resolução) não é categoria.
+    # TEMPLATES_DIR/default/<categoria> and TEMPLATES_DIR/<resolucao>/<categoria> —
+    # two layers, not one: the group (default or resolution) is not a category.
     pastas = sorted(
         categoria
         for grupo in TEMPLATES_DIR.iterdir()

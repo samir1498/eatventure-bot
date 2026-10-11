@@ -1,9 +1,9 @@
 """
-Screenshot do device via adb. tests/capture/ é descartável (fora do git);
-tests/images/ são fixtures versionados do teste de regressão. O
-template_selector grava só na primeira — antes gravava sempre em
-tests/images/screen.png, sobrescrevendo em silêncio o fixture de
-tests/test_detection.py.
+Device screenshot via adb. tests/capture/ is disposable (outside git);
+tests/images/ are versioned regression-test fixtures. The
+template_selector writes only to the former — it used to always write to
+tests/images/screen.png, silently overwriting the
+tests/test_detection.py fixture.
 
     python tests/android_screenshot.py                  -> tests/capture/screen.png
     python tests/android_screenshot.py --fixture nome.png -> tests/images/nome.png
@@ -29,7 +29,7 @@ class AndroidScreenshot:
 
     def __init__(self, output_dir=None, serial=None):
 
-        # None = deixa o adb decidir, o que só funciona com UM device conectado.
+        # None = lets adb decide, which only works with ONE connected device.
         self.serial = serial
 
         self.output_dir = (
@@ -44,7 +44,7 @@ class AndroidScreenshot:
         )
 
     def _adb(self, *args):
-        """Sem -s, com dois devices na lista, o adb recusa com "more than one device"."""
+        """Without -s, with two devices listed, adb refuses with "more than one device"."""
 
         comando = ["adb"]
 

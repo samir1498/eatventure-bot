@@ -1,8 +1,8 @@
 """
-Testes da escala e das coordenadas do seletor de templates. Um erro de
-mapeamento aqui não dá erro nenhum — salva o recorte ERRADO em silêncio,
-e só aparece semanas depois como "o bot clica no lugar errado". Por isso
-a matemática é testada separada da GUI.
+Tests for the template selector's scale and coordinates. A mapping
+error here raises no error — it silently saves the WRONG crop,
+and only shows up weeks later as "the bot clicks the wrong place". That's
+why the math is tested apart from the GUI.
 """
 
 import sys
@@ -22,15 +22,15 @@ from selector_layout import (                    # noqa: E402
 )
 
 
-# Tela do device, do jeito que ela é: alta e estreita.
+# Device screen, as it is: tall and narrow.
 LARGURA = 1080
 ALTURA = 2400
 
 
 def test_a_altura_e_quem_manda():
     """
-    A janela acompanha a ALTURA da tela. Numa tela alta e estreita a
-    largura tem folga de sobra, e dobrar o teto de largura não muda nada.
+    The window follows the screen HEIGHT. On a tall narrow screen the
+    width has slack to spare, and doubling the width cap changes nothing.
     """
 
     valor = escala(LARGURA, ALTURA, 3268, 1152)
@@ -43,7 +43,7 @@ def test_a_altura_e_quem_manda():
 
 
 def test_fracao_de_80_por_cento_de_1440():
-    """Caso real: monitor 3440x1440, fração 0.80."""
+    """Real case: 3440x1440 monitor, 0.80 fraction."""
 
     valor = escala(
         LARGURA,
@@ -58,7 +58,7 @@ def test_fracao_de_80_por_cento_de_1440():
 
 
 def test_largura_ainda_protege():
-    """A largura tem de continuar limitando quando for de fato o gargalo."""
+    """Width must still cap when it's actually the bottleneck."""
 
     valor = escala(LARGURA, ALTURA, 300, 5000)
 
@@ -66,7 +66,7 @@ def test_largura_ainda_protege():
 
 
 def test_nao_amplia_por_padrao():
-    """Ampliar não cria detalhe: só deixa o recorte borrado."""
+    """Upscaling creates no detail: it just blurs the crop."""
 
     assert escala(100, 100, 2000, 2000) == 1.0
 
@@ -80,7 +80,7 @@ def test_nao_amplia_por_padrao():
 
 
 def test_mantem_a_proporcao():
-    """A proporção da janela tem de ser a mesma da imagem."""
+    """The window ratio must match the image ratio."""
 
     valor = escala(LARGURA, ALTURA, 3268, 1152)
 
@@ -124,9 +124,9 @@ def test_janela_cabe_no_limite():
 
 def test_ida_e_volta_em_toda_a_area():
     """
-    janela -> imagem -> janela tem de voltar ao mesmo pixel, dentro do
-    erro de arredondamento. Testado em TODA a área, não só nos cantos:
-    um erro de sinal no meio da imagem passaria por um teste de canto.
+    window -> image -> window must return to the same pixel, within
+    rounding error. Tested over the WHOLE area, not just corners:
+    a sign error in the middle of the image would pass a corner test.
     """
 
     for max_altura in (900, 1152, 1296):
@@ -178,7 +178,7 @@ def test_ida_e_volta_em_toda_a_area():
 
 
 def test_coordenada_presa_na_imagem():
-    """Numpy aceita índice negativo em silêncio e recorta do outro lado da imagem."""
+    """Numpy silently accepts negative indices and crops from the other side of the image."""
 
     valor = escala(LARGURA, ALTURA, 3268, 1152)
 
@@ -221,13 +221,13 @@ def test_origem_e_fim_batem():
         valor,
     )
 
-    # Tolerância de 1 px: a largura da janela é arredondada.
+    # 1 px tolerance: the window width is rounded.
     assert LARGURA - x_imagem <= 1, x_imagem
     assert ALTURA - y_imagem <= 1, y_imagem
 
 
 def test_meio_da_janela_e_o_meio_da_imagem():
-    """Pega inversão de eixo ou offset esquecido."""
+    """Catches a swapped axis or forgotten offset."""
 
     valor = escala(LARGURA, ALTURA, 3268, 1152)
 
@@ -250,7 +250,7 @@ def test_meio_da_janela_e_o_meio_da_imagem():
 
 
 def _arrasta(imagem, valor, canto_a, canto_b):
-    """Simula o arrasto do mouse do jeito que o template_selector faz."""
+    """Simulates the mouse drag the way template_selector does it."""
 
     altura, largura = imagem.shape[:2]
 
@@ -278,15 +278,15 @@ def _arrasta(imagem, valor, canto_a, canto_b):
 
 def test_arrasto_recorta_a_regiao_certa():
     """
-    Prova fim a fim, sem GUI: marcador branco em posição conhecida, e o
-    arrasto por cima dele na janela reduzida tem de sair branco. Se o
-    mapeamento tivesse offset, o recorte sairia preto — template do
-    pedaço errado da tela.
+    End-to-end proof, no GUI: white marker at a known position, and the
+    drag over it on the shrunk window must come out white. If the
+    mapping had an offset, the crop would come out black — template of
+    the wrong screen region.
     """
 
     imagem = np.zeros((ALTURA, LARGURA, 3), np.uint8)
 
-    # Posição sem simetria, para um eixo trocado não passar por acidente.
+    # Asymmetric position, so a swapped axis can't pass by accident.
     alvo = (300, 1700, 460, 1820)   # x1, y1, x2, y2
 
     imagem[alvo[1]:alvo[3], alvo[0]:alvo[2]] = 255
@@ -295,7 +295,7 @@ def test_arrasto_recorta_a_regiao_certa():
 
         valor = escala(LARGURA, ALTURA, 3268, max_altura)
 
-        # Bem por dentro do marcador, para o arredondamento não encostar na borda.
+        # Well inside the marker, so rounding doesn't touch the edge.
         canto_a = para_canvas(alvo[0] + 12, alvo[1] + 12, valor)
         canto_b = para_canvas(alvo[2] - 12, alvo[3] - 12, valor)
 

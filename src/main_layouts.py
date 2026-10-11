@@ -1,15 +1,15 @@
-"""EatVenture AI — atualizador de layouts (python src/main_layouts.py).
+"""EatVenture AI — layout updater (python src/main_layouts.py).
 
-Mesma janela/visão do main.py; a única diferença é o que roda por trás:
-aqui não há StateMachine nem ações, só captura + Detector com os defaults
-ligados em todas as categorias (categories=None), o que aciona o
-aprendizado de overrides já existente em vision/detector.py
-(_queue_learn_candidate / _learn_worker) — sem custar nada ao loop do bot
-principal quando ele roda com `main.py --layout-only`.
+Same window/vision as main.py; the only difference is what runs behind it:
+no StateMachine or actions here, only capture + Detector with defaults
+enabled in every category (categories=None), which triggers the
+already existing override learning in vision/detector.py
+(_queue_learn_candidate / _learn_worker) — at no cost to the bot's
+main loop when it runs with `main.py --layout-only`.
 
-O outro processo recarrega os overrides sozinho — ver
-Detector._maybe_reload_templates / TEMPLATES_WATCH_INTERVAL. Nenhuma
-comunicação entre os dois além do disco.
+The other process reloads the overrides on its own — see
+Detector._maybe_reload_templates / TEMPLATES_WATCH_INTERVAL. No
+communication between the two besides the disk.
 """
 
 import argparse
@@ -39,8 +39,8 @@ from vision.detector import Detector
 
 logger = log.get("main_layouts")
 
-# Só usado quando SHOW_AI_VISION está desligado — sem janela, é o único
-# jeito de ver o progresso.
+# Only used when SHOW_AI_VISION is off — without a window, it is the only
+# way to see progress.
 REPORT_INTERVAL = 10.0
 
 
@@ -106,8 +106,8 @@ def run_loop(capture, detector):
 
     while True:
 
-        # Timeout curto para a janela do OpenCV continuar respondendo
-        # (e o ESC funcionar) mesmo se o stream travar.
+        # Short timeout so the OpenCV window stays responsive
+        # (and ESC works) even if the stream stalls.
         frame, version, _timestamp = capture.get_frame(
             since_version=last_version,
             timeout=0.2,
@@ -126,8 +126,8 @@ def run_loop(capture, detector):
 
         started = time.monotonic()
 
-        # categories=None: passa por TODAS as categorias, não só as do
-        # estado atual do jogo — é isso que dá cobertura ampla aos defaults.
+        # categories=None: goes through ALL categories, not just the
+        # game's current state's — that is what gives defaults broad coverage.
         detections = detector.detect(frame)
 
         detect_duration.add(time.monotonic() - started)
@@ -183,8 +183,8 @@ def run_loop(capture, detector):
                 "detect_ms": detect_duration.average() * 1000,
                 "detections": len(detections),
 
-                # Cobertura da pasta da resolução sobre o default —
-                # o número que diz se ainda vale a pena este processo rodar.
+                # Coverage of the resolution folder over the default —
+                # the number that says whether this process is still worth running.
                 "coverage": detector.template_coverage(),
             },
             scale=escala_janela,
@@ -192,7 +192,7 @@ def run_loop(capture, detector):
 
         cv2.imshow(AI_WINDOW_NAME, ai_frame)
 
-        # ESC só chega aqui, é esta janela que recebe teclas.
+        # ESC only arrives here; this window receives keys.
         if cv2.waitKey(1) & 0xFF == 27:
             break
 
@@ -213,7 +213,7 @@ def main(argv=None):
 
         return 1
 
-    # Espelho do scrcpy é opcional: a captura deste processo não passa por ele.
+    # The scrcpy mirror is optional: this process's capture does not go through it.
     scrcpy_process = (
         start_scrcpy(device_id)
         if SHOW_SCRCPY

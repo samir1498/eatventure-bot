@@ -1,4 +1,4 @@
-"""Detector por template matching: 2-stage search, ROI/category filters, NMS."""
+"""Template-matching detector: 2-stage search, ROI/category filters, NMS."""
 
 from pathlib import Path
 
@@ -55,20 +55,20 @@ from core.config import (
 logger = log.get("detector")
 
 
-# Relativo ao arquivo, não ao cwd — não depende de rodar da raiz do repo.
+# Relative to this file, not the cwd — independent of running from the repo root.
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
-# Templates comuns a todo device. Pastas irmãs desta, nomeadas "LARGURAxALTURA"
-# (na resolução real do frame, sem normalizar orientação), guardam extras/
-# overrides só daquele device — mescladas com estas em runtime.
+# Templates shared by every device. Sibling folders of this one, named "WIDTHxHEIGHT"
+# (in the frame's real resolution, without normalizing orientation), hold extras/
+# overrides for that device only — merged with these at runtime.
 DEFAULT_TEMPLATES_DIR = TEMPLATES_DIR / "default"
 
-# Capturas manuais fora da resolução de referência (tools/template_selector.py):
-# ficam aqui, cruas, sem entrar no default nem em nenhuma resolução — não são
-# carregadas em runtime.
+# Manual captures outside the reference resolution (tools/template_selector.py):
+# stay here, raw, without entering default or any resolution — they are not
+# loaded at runtime.
 FALLBACK_SELECTOR_DIR = TEMPLATES_DIR / "default_selector"
 
-# Abaixo deste tamanho a redução destrói o template.
+# Below this size downscaling destroys the template.
 MIN_COARSE_SIDE = 12
 
 
@@ -86,16 +86,16 @@ class Detector:
         learn_only_actions=False,
     ):
 
-        # False: busca só os overrides da resolução (rápido, mas cego onde
-        # ainda não há override) — para o bot rodar enquanto outro processo
-        # (main_layouts.py) escaneia os defaults e atualiza os overrides.
+        # False: search only the resolution overrides (fast, but blind where
+        # there is no override yet) — lets the bot run while another process
+        # (main_layouts.py) scans the defaults and updates the overrides.
         self.use_defaults = use_defaults
         self.learn_only_actions = learn_only_actions
 
-        # Similaridade do formato/padrão
+        # Shape/pattern similarity
         self.threshold = threshold
 
-        # Similaridade das cores
+        # Color similarity
         self.color_threshold = color_threshold
 
         self.category_thresholds = (
@@ -115,73 +115,73 @@ class Detector:
 
         self.templates = []
 
-        # Índice por categoria: com filtro de estado a passada olha 2 categorias, não 43.
+        # Per-category index: with the state filter a pass looks at 2 categories, not 43.
         self.by_category = {}
 
-        # Templates são reescalados para o frame (1x por resolução), não o
-        # inverso: evita letterbox do frame inteiro e conversão de coordenada
-        # por passada.
+        # Templates are rescaled to the frame (1x per resolution), not the
+        # other way around: avoids letterboxing the whole frame and per-pass
+        # coordinate conversion.
         self._scaled_cache = {}
 
-        # Defaults reescalados, separados do merge acima: um template
-        # aprendido invalida o merge daquela resolução, e sem este cache
-        # isso obrigaria reescalar todos os defaults no frame seguinte.
+        # Rescaled defaults, kept apart from the merge above: a learned
+        # template invalidates that resolution's merge, and without this cache
+        # that would force rescaling every default on the next frame.
         self._defaults_cache = {}
 
-        # ROI em pixels por (categoria, largura, altura).
+        # ROI in pixels per (category, width, height).
         self._roi_cache = {}
 
-        # (resolução, categoria) -> {nome_base: (escala que bateu, quando)}.
-        # Enquanto há escala conhecida, a passada olha só ela — as outras
-        # variantes do pente existem no cache mas não são procuradas.
+        # (resolution, category) -> {nome_base: (scale that hit, when)}.
+        # While a scale is known, the pass only looks at it — the other
+        # comb variants exist in the cache but are not searched.
         self._escala_ativa = {}
 
-        # (resolução, categoria) -> passadas dadas, para rotacionar a sonda
-        # de escala dos templates que ainda não bateram nenhuma vez.
+        # (resolution, category) -> passes run, to rotate the scale
+        # probe of templates that never matched.
         self._sonda = {}
 
-        # (resolução, categoria) -> passadas completas seguidas sem detecção.
-        # Ao chegar em ESCALA_LIBERA_SECAS as escalas travadas da categoria
-        # são soltas, e a sonda volta a procurar a vencedora.
+        # (resolution, category) -> consecutive full passes with no detection.
+        # Once ESCALA_LIBERA_SECAS is reached the category's locked scales
+        # are released, and the probe resumes searching for the winner.
         self._secas = {}
 
-        # (resolução, categoria) -> {nome_base: instante do último match}.
-        # Ordena a fila da categoria: quem bateu há pouco vem primeiro.
+        # (resolution, category) -> {nome_base: time of last match}.
+        # Orders the category queue: recent hitters go first.
         self._quentes = {}
 
-        # Ordem já montada por (resolução, categoria) e a versão do conjunto
-        # quente que a gerou — reordenar 86 templates a cada frame custaria
-        # mais que os matches que a ordem economiza.
+        # Order already built per (resolution, category) plus the version of the
+        # hot set that produced it — reordering 86 templates every frame would cost
+        # more than the matches the order saves.
         self._ordem_cache = {}
         self._quentes_versao = 0
 
-        # Categorias cuja última passada foi cortada pelo teto de detecções:
-        # _report_misses não pode chamar de "não detectado" o que não foi
-        # olhado, e o HUD não pode dizer que procurou tudo.
+        # Categories whose last pass was cut by the detection cap:
+        # _report_misses must not call "not detected" what was never
+        # looked at, and the HUD must not claim it searched everything.
         self.last_total = 0
         self._parciais = set()
 
-        # Sobe a cada override commitado ou reload: quem calculou um merge
-        # fora do lock confere antes de publicá-lo.
+        # Bumped on every committed override or reload: whoever computed a merge
+        # outside the lock checks before publishing it.
         self._overrides_versao = 0
 
-        # Templates extras/override por device: (frame_width, frame_height) ->
-        # {categoria: [template]}. Carregados 1x do disco, sem reescala (já
-        # nasceram na resolução do device).
+        # Extra/override templates per device: (frame_width, frame_height) ->
+        # {category: [template]}. Loaded 1x from disk, no rescale (already
+        # born at the device resolution).
         self._resolution_templates = {}
 
-        # (chave, categoria, nome) -> confiança do match que gerou a versão
-        # salva do override. Nova candidata só substitui se vier com
-        # confiança maior — o override melhora com o tempo, nunca piora.
+        # (key, category, name) -> confidence of the match that produced the
+        # saved override version. A new candidate replaces it only with
+        # higher confidence — the override improves over time, never regresses.
         self._fidelity = {}
 
-        # Protege _fidelity/_resolution_templates/_scaled_cache de corrida
-        # entre a thread de visão (detect) e a thread de aprendizado.
+        # Guards _fidelity/_resolution_templates/_scaled_cache against races
+        # between the vision thread (detect) and the learning thread.
         self._learn_lock = threading.Lock()
 
-        # Fila descartável: a thread de visão só copia o recorte (barato) e
-        # devolve — quem grava em disco é a thread de aprendizado, para
-        # não bloquear o detect() com I/O.
+        # Droppable queue: the vision thread only copies the crop (cheap) and
+        # returns — the learning thread writes to disk, so as not
+        # to block detect() with I/O.
         self._learn_queue = queue.Queue()
 
         self._learn_thread = threading.Thread(
@@ -192,36 +192,36 @@ class Detector:
 
         self._learn_thread.start()
 
-        # (mtime mais recente, total de .png) na última checagem — permite
-        # notar template novo/editado na pasta sem reiniciar o bot.
+        # (newest mtime, total .png count) at the last check — lets us
+        # notice new/edited templates in the folder without restarting the bot.
         self._templates_signature_cache = None
         self._templates_checked_at = 0.0
 
-        # Templates olhados na última passada.
+        # Templates examined on the last pass.
         self.last_searched = 0
 
-        # Resolução do último frame analisado: o draw() recebe o frame já
-        # reduzido para a janela e não teria como saber a original.
+        # Resolution of the last analyzed frame: draw() receives the frame already
+        # downscaled for the window and would have no way to know the original.
         self._last_frame_size = None
 
-        # Só populado com DETECTOR_DEBUG_MISSES ligado (custo: 1 bool por
-        # match). Distingue "não detectou" de "detectou e o threshold
-        # cortou" — correções opostas com o mesmo sintoma (bot parado).
+        # Only populated with DETECTOR_DEBUG_MISSES on (cost: 1 bool per
+        # match). Distinguishes "did not detect" from "detected but the threshold
+        # cut it" — opposite fixes for the same symptom (stalled bot).
         self._best = {}
         self._best_color = {}
 
         self._debug_category = None
         self._debug_at = 0.0
 
-        # Relatório em texto para o painel: com o painel ligado o console
-        # fica em WARNING e o log INFO não aparece.
+        # Text report for the panel: with the panel on the console
+        # stays at WARNING and the INFO log never shows.
         self._miss_text = ""
         self._miss_at = 0.0
 
         self.load_templates()
 
     def _coarse_scale_for(self, smallest_side):
-        """Menor escala com MIN_COARSE_SIDE de lado; arredonda para cima na grade (opção mais segura)."""
+        """Smallest scale with MIN_COARSE_SIDE on a side; rounds up to the grid (safest option)."""
 
         if smallest_side <= 0:
             return self.coarse_scale
@@ -233,7 +233,7 @@ class Detector:
             * COARSE_SCALE_STEP
         )
 
-        # round() evita 0.15000000000000002 virar chave duplicada no cache de escalas.
+        # round() keeps 0.15000000000000002 from becoming a duplicate key in the scale cache.
         return round(
             min(
                 self.coarse_scale,
@@ -248,13 +248,13 @@ class Detector:
             self._load_templates_locked()
 
     def _load_templates_locked(self, manter_defaults=False):
-        """Corpo de load_templates() protegido pelo lock — a thread de
-        aprendizado também muda _resolution_templates/_fidelity.
+        """Body of load_templates() guarded by the lock — the learning
+        thread also mutates _resolution_templates/_fidelity.
 
-        manter_defaults: os .png da pasta default não mudaram, só os de
-        alguma resolução. Reler os defaults e reescalar todas as variantes
-        neste caso custaria ~1400 cv2.resize dentro do detect(), na thread
-        de visão, a cada template aprendido."""
+        manter_defaults: the default folder .png files did not change, only some
+        resolution's did. Re-reading the defaults and rescaling every variant
+        in that case would cost ~1400 cv2.resize calls inside detect(), on the
+        vision thread, for each learned template."""
 
         self._scaled_cache.clear()
         self._ordem_cache.clear()
@@ -365,7 +365,7 @@ class Detector:
             ),
         )
 
-        # Sem template não há detecção — mesmo sintoma de detector quebrado (bot parado).
+        # With no templates there is no detection — same symptom as a broken detector (stalled bot).
         if not self.templates:
 
             logger.error(
@@ -380,8 +380,8 @@ class Detector:
 
     @staticmethod
     def _assina_pastas(pastas):
-        """(mtime mais recente, total de .png) — muda com qualquer template
-        novo, editado ou removido, sem comparar conteúdo arquivo por arquivo."""
+        """(newest mtime, total .png count) — changes with any new,
+        edited, or removed template, without comparing file contents one by one."""
 
         ultima = 0.0
         total = 0
@@ -405,7 +405,7 @@ class Detector:
         return (round(ultima, 3), total)
 
     def _pastas_resolucao(self):
-        """Pastas "LARGURAxALTURA" irmãs da default — os overrides por device."""
+        """"WIDTHxHEIGHT" folders next to default — the per-device overrides."""
 
         pastas = []
 
@@ -431,9 +431,9 @@ class Detector:
         return pastas
 
     def _templates_signature(self):
-        """Assinatura em duas metades: (defaults, overrides). Separadas porque
-        só a primeira obriga a reescalar tudo — e é a segunda que a própria
-        thread de aprendizado muda toda vez que grava um template."""
+        """Two-half signature: (defaults, overrides). Split because
+        only the first forces a full rescale — and the second is what the
+        learning thread itself changes every time it writes a template."""
 
         return (
             self._assina_pastas([DEFAULT_TEMPLATES_DIR]),
@@ -441,16 +441,16 @@ class Detector:
         )
 
     def _reassina_overrides(self):
-        """Põe a metade de overrides da assinatura em dia com o disco. Chamada
-        pela thread de aprendizado depois de gravar: sem isto o watcher lê a
-        própria escrita como mudança externa e recarrega os templates a cada
-        item aprendido.
+        """Brings the overrides half of the signature up to date with disk. Called
+        by the learning thread after writing: without this the watcher reads its
+        own write as an external change and reloads the templates on every
+        learned item.
 
-        Recalcula do disco em vez de somar 1 ao total — o cv2.imwrite fica
-        fora do lock, então a thread de visão pode já ter absorvido esse
-        arquivo, e um incremento às cegas deixaria a contagem permanentemente
-        adiantada (nunca mais haveria reload). O rglob sai na thread de
-        aprendizado, não na de visão."""
+        Recomputes from disk instead of adding 1 to the total — cv2.imwrite runs
+        outside the lock, so the vision thread may already have absorbed that
+        file, and a blind increment would leave the count permanently
+        ahead (no reload would ever happen again). The rglob runs on the
+        learning thread, not the vision one."""
 
         if self._templates_signature_cache is None:
             return
@@ -463,9 +463,9 @@ class Detector:
         )
 
     def _maybe_reload_templates(self):
-        """Recarrega do disco quando a pasta de templates muda — permite
-        adicionar/editar templates (ex.: tools/template_selector.py) sem
-        reiniciar o bot."""
+        """Reloads from disk when the template folder changes — allows
+        adding/editing templates (e.g. tools/template_selector.py) without
+        restarting the bot."""
 
         if not TEMPLATES_WATCH_INTERVAL:
             return
@@ -480,11 +480,11 @@ class Detector:
 
         self._templates_checked_at = agora
 
-        # Comparar e recarregar sob o MESMO lock: entre calcular a assinatura
-        # e agir sobre ela, a thread de aprendizado pode gravar e absorver a
-        # própria escrita, e o reload seguinte desfaria esse registro.
-        # _load_templates_locked (não load_templates) porque o lock não é
-        # reentrante.
+        # Compare and reload under the SAME lock: between computing the signature
+        # and acting on it, the learning thread may write and absorb its
+        # own write, and the next reload would undo that record.
+        # _load_templates_locked (not load_templates) because the lock is not
+        # reentrant.
         with self._learn_lock:
 
             assinatura = self._templates_signature()
@@ -510,7 +510,7 @@ class Detector:
             )
 
     def _load_category_dirs(self, base_dir, origin):
-        """[template] de todas as subpastas de categoria dentro de base_dir."""
+        """[template] from every category subfolder inside base_dir."""
 
         templates = []
 
@@ -541,7 +541,7 @@ class Detector:
 
     @staticmethod
     def _parse_resolution_dir_name(name):
-        """"LARGURAxALTURA" -> (largura, altura), ou None se o nome não seguir o padrão."""
+        """"WIDTHxHEIGHT" -> (width, height), or None if the name does not follow the pattern."""
 
         largura, _, altura = name.partition("x")
 
@@ -550,9 +550,9 @@ class Detector:
 
         return int(largura), int(altura)
 
-    # "1080x2400_item_001.png" -> ("1080x2400", "item_001.png"). O default
-    # acumula recortes de devices diferentes, então o nome carrega a
-    # resolução de origem; o miolo é a identidade que liga default e override.
+    # "1080x2400_item_001.png" -> ("1080x2400", "item_001.png"). Default
+    # accumulates crops from different devices, so the name carries the
+    # source resolution; the middle is the identity linking default and override.
     _SOURCE_PREFIX = re.compile(r"^(\d+x\d+)_(.+)$")
 
     @classmethod
@@ -567,13 +567,13 @@ class Detector:
 
     @classmethod
     def _base_name(cls, name):
-        """Nome sem o prefixo de resolução — mesma identidade em qualquer pasta."""
+        """Name without the resolution prefix — same identity in any folder."""
 
         return cls._split_source(name)[1]
 
     def template_coverage(self, frame_width=None, frame_height=None):
-        """(quantos defaults já têm override nesta resolução, total de defaults).
-        É o número que diz se a pasta da resolução está completa."""
+        """(how many defaults already have an override at this resolution, total defaults).
+        The number that tells whether the resolution folder is complete."""
 
         if frame_width is None or frame_height is None:
 
@@ -584,9 +584,9 @@ class Detector:
 
         with self._learn_lock:
 
-            # Par (categoria, nome-base): categorias diferentes reusam o
-            # mesmo item_NNN.png, então só o nome colapsaria box/item_001
-            # com upgrade/item_001 e o total sairia menor que a verdade.
+            # (category, base-name) pair: different categories reuse the
+            # same item_NNN.png, so the name alone would collapse box/item_001
+            # with upgrade/item_001 and the total would come out smaller than reality.
             defaults = {
                 (
                     template["category"],
@@ -616,8 +616,8 @@ class Detector:
         return resolution_dir / "_fidelity.json"
 
     def _load_fidelity(self, chave, resolution_dir):
-        """Carrega a confiança salva de cada override desta resolução — sem
-        entrada aqui, a próxima candidata (mesmo fraca) substitui de cara."""
+        """Loads the saved confidence of each override at this resolution — without
+        an entry here, the next candidate (even a weak one) replaces it outright."""
 
         caminho = self._fidelity_path(resolution_dir)
 
@@ -645,15 +645,15 @@ class Detector:
             if not categoria or not nome:
                 continue
 
-            # Nome-base na chave: é a identidade que liga default e
-            # override, e é o formato que os _fidelity.json já têm em disco.
+            # Base name in the key: it is the identity linking default and
+            # override, and the format the _fidelity.json files already use on disk.
             self._fidelity[
                 (chave, categoria, self._base_name(nome))
             ] = float(confianca)
 
     def _save_fidelity(self, chave):
-        """Persiste a fidelidade dos overrides desta resolução — sem isto, um
-        restart esquece a confiança e a próxima candidata substitui à toa."""
+        """Persists the override fidelity for this resolution — without this, a
+        restart forgets the confidence and the next candidate replaces it needlessly."""
 
         resolution_dir = TEMPLATES_DIR / f"{chave[0]}x{chave[1]}"
 
@@ -702,7 +702,7 @@ class Detector:
 
             image = raw[:, :, :3]
 
-            # Só vale a pena se houver transparência real.
+            # Only worth it if there is real transparency.
             if (alpha < 255).any():
 
                 mask = (alpha > 0).astype(np.uint8) * 255
@@ -724,12 +724,12 @@ class Detector:
         )
 
     def _build_template(self, category, name, image, mask, origin):
-        """Separado do carregamento: mesmo caminho para o PNG original e para a versão reescalada, para as duas não divergirem."""
+        """Split from loading: same path for the original PNG and the rescaled version, so the two never diverge."""
 
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        # HSV calculado uma vez aqui — não a cada candidato em
-        # _color_similarity (imagem nunca muda).
+        # HSV computed once here — not per candidate in
+        # _color_similarity (the image never changes).
         template_hsv = cv2.cvtColor(
             image,
             cv2.COLOR_BGR2HSV,
@@ -737,7 +737,7 @@ class Detector:
 
         height, width = gray.shape[:2]
 
-        # Escala própria deste template (não a global, travada pelo menor de todos).
+        # This template's own scale (not the global one, pinned by the smallest of all).
         scale = self._coarse_scale_for(min(height, width))
 
         coarse_gray = None
@@ -772,8 +772,8 @@ class Detector:
             "name": name,
             "origin": origin,
 
-            # Resolução em que este recorte foi capturado, quando o nome
-            # diz — é o que o overlay mostra como "layout".
+            # Resolution where this crop was captured, when the name
+            # says so — what the overlay shows as "layout".
             "source": self._split_source(name)[0],
 
             "image": image,
@@ -781,8 +781,8 @@ class Detector:
             "hsv": template_hsv,
             "mask": mask,
 
-            # Bool pré-calculado: `mask > 0` por candidato é
-            # uma passada a mais numa máscara constante.
+            # Precomputed bool: `mask > 0` per candidate is
+            # one extra pass over a constant mask.
             "mask_valid": None if mask is None else mask > 0,
 
             "coarse_gray": coarse_gray,
@@ -795,7 +795,7 @@ class Detector:
 
     @staticmethod
     def _reference_size(frame_width, frame_height):
-        """Referência na orientação do frame: o jogo roda deitado (2400x1080) mas a referência está escrita 1080x2400 — sem a troca a razão sai absurda e nada detecta."""
+        """Reference in the frame's orientation: the game runs landscape (2400x1080) but the reference is written 1080x2400 — without the swap the ratio comes out absurd and nothing detects."""
 
         ref_width = REFERENCE_WIDTH
         ref_height = REFERENCE_HEIGHT
@@ -809,7 +809,7 @@ class Detector:
 
     @classmethod
     def _frame_scale(cls, frame_width, frame_height):
-        """Fator de escala do template para este frame, via TEMPLATE_SCALE_BASIS — não existe critério universal porque o que varia entre aparelhos é proporção, não só resolução."""
+        """Template scale factor for this frame, via TEMPLATE_SCALE_BASIS — no universal rule exists because what varies across devices is aspect ratio, not just resolution."""
 
         if not REFERENCE_WIDTH or not REFERENCE_HEIGHT:
             return 1.0
@@ -849,9 +849,9 @@ class Detector:
                 TEMPLATE_SCALE_BASIS,
             )
 
-        # UI de jogo mobile se ancora na dimensão ESTREITA: o
-        # excedente da outra vira mais cenário, não interface
-        # maior.
+        # Mobile game UI anchors to the NARROW dimension: the
+        # other dimension's surplus becomes more scenery, not a
+        # bigger interface.
         return (
             min(frame_width, frame_height)
             / min(ref_width, ref_height)
@@ -859,7 +859,7 @@ class Detector:
 
     @classmethod
     def _is_reference(cls, frame_width, frame_height):
-        """Frame já na resolução de referência (em qualquer orientação) — caso de custo zero, nada a reescalar."""
+        """Frame already at the reference resolution (either orientation) — zero-cost case, nothing to rescale."""
 
         return (frame_width, frame_height) in (
             (REFERENCE_WIDTH, REFERENCE_HEIGHT),
@@ -867,10 +867,10 @@ class Detector:
         )
 
     def _rescale_template(self, template, scale):
-        """Mesmo template na escala do frame, ou None se encolher demais."""
+        """Same template at the frame scale, or None if it shrinks too far."""
 
-        # Escala 1.0: devolve o original — resize daria a mesma dimensão
-        # de volta, perdendo nitidez à toa.
+        # Scale 1.0: return the original — resize would give back the same dimensions,
+        # losing sharpness for nothing.
         if abs(scale - 1.0) <= 0.005:
             return template
 
@@ -911,7 +911,7 @@ class Detector:
         )
 
     def _templates_for(self, frame_width, frame_height):
-        """Templates deste frame por categoria: default (reescalado para o frame, em várias escalas) + overrides da pasta do device, cacheados por resolução."""
+        """Templates for this frame per category: default (rescaled to the frame, at several scales) + device-folder overrides, cached per resolution."""
 
         chave = (frame_width, frame_height)
 
@@ -920,9 +920,9 @@ class Detector:
         if cacheados is not None:
             return cacheados
 
-        # Snapshot rápido sob lock: a thread de aprendizado também escreve
-        # em _resolution_templates/_scaled_cache, e o resto desta função
-        # (reescala, merge) é caro demais pra fazer com o lock preso.
+        # Quick snapshot under lock: the learning thread also writes
+        # to _resolution_templates/_scaled_cache, and the rest of this function
+        # (rescale, merge) is too expensive to run while holding the lock.
         with self._learn_lock:
 
             versao = self._overrides_versao
@@ -944,10 +944,10 @@ class Detector:
             else {}
         )
 
-        # Sempre uma cópia, nunca o próprio dict de _defaults_cache: os dois
-        # caches são invalidados em momentos diferentes (override aprendido
-        # descarta só este), e compartilhar as listas fazia um pop() aqui
-        # mutilar o cache de defaults.
+        # Always a copy, never the _defaults_cache dict itself: the two
+        # caches are invalidated at different times (a learned override
+        # discards only this one), and sharing the lists let a pop() here
+        # mutilate the defaults cache.
         cacheados = {
             categoria: list(lista)
             for categoria, lista in default_categorias.items()
@@ -955,12 +955,12 @@ class Detector:
 
         if extras:
 
-            # Override não substitui o default na busca — só entra na
-            # frente. Se ele não bater neste frame, o default do mesmo nome
-            # ainda está na lista e pode salvar a detecção. Tirar as
-            # variantes de escala daqui tiraria justamente a que está
-            # vencendo neste device, e a sonda de escala já faz o pente
-            # inteiro custar 1 match por passada — não há o que economizar.
+            # Overrides do not replace defaults in the search — they only go
+            # first. If one misses on this frame, the same-named default
+            # is still in the list and can save the detection. Removing the
+            # scale variants here would remove exactly the one
+            # winning on this device, and the scale probe already makes the whole
+            # comb cost 1 match per pass — nothing left to save.
             for categoria, lista in extras.items():
 
                 cacheados[categoria] = (
@@ -969,21 +969,21 @@ class Detector:
 
         with self._learn_lock:
 
-            # Override commitado enquanto este merge era calculado: o pop
-            # dele não achou nada para invalidar, e publicar agora deixaria
-            # o cache sem o override, sem nada pendente para corrigi-lo.
+            # Override committed while this merge was being computed: its pop
+            # found nothing to invalidate, and publishing now would leave
+            # the cache without the override, with nothing pending to fix it.
             if versao == self._overrides_versao:
                 self._scaled_cache[chave] = cacheados
 
         return cacheados
 
     def _defaults_for(self, frame_width, frame_height):
-        """Defaults reescalados desta resolução, cacheados à parte do merge.
+        """Rescaled defaults for this resolution, cached apart from the merge.
 
-        Também na referência: o zoom da câmera do jogo muda o tamanho do
-        ícone na tela (medido: 10% menor derruba 0.98 -> 0.80), então escala
-        1.0 fixa deixava justo a resolução de referência sem a tolerância
-        que todas as outras já tinham."""
+        Also at the reference: the game camera zoom changes the on-screen
+        icon size (measured: 10% smaller drops 0.98 -> 0.80), so a fixed
+        1.0 scale left exactly the reference resolution without the tolerance
+        every other one already had."""
 
         chave = (frame_width, frame_height)
 
@@ -1001,7 +1001,7 @@ class Detector:
         return cacheados
 
     def _rescale_defaults(self, frame_width, frame_height):
-        """Templates default reescalados para este frame, em várias escalas ao redor da base (nenhuma aposta única: 8% de erro de escala já derruba a confiança abaixo de 0.95, e a supressão por sobreposição + ordenação por confiança escolhe o melhor entre elas)."""
+        """Default templates rescaled to this frame, at several scales around the base (no single bet: 8% scale error already drops confidence below 0.95, and overlap suppression + confidence ordering picks the best of them)."""
 
         base = self._frame_scale(frame_width, frame_height)
 
@@ -1033,8 +1033,8 @@ class Detector:
                 if variante is None:
                     continue
 
-                # _rescale_template devolve o PRÓPRIO template quando a
-                # escala é ~1.0: anotar nele contaminaria self.templates.
+                # _rescale_template returns the template ITSELF when the
+                # scale is ~1.0: annotating it would contaminate self.templates.
                 if variante is template:
                     variante = dict(template)
 
@@ -1042,10 +1042,10 @@ class Detector:
                 variante["escala"] = escala
                 variante["escala_base"] = escala == base_arredondada
 
-                # Posição no pente: enquanto a escala deste template for
-                # desconhecida, cada passada sonda UMA posição (rotativa),
-                # então o custo é 1 match por template por passada em vez
-                # de 5, e a escala certa aparece em no máximo 5 passadas.
+                # Position in the comb: while this template's scale is
+                # unknown, each pass probes ONE (rotating) position,
+                # so the cost is 1 match per template per pass instead
+                # of 5, and the right scale shows up within 5 passes.
                 variante["indice_escala"] = indice
                 variante["total_escalas"] = total_escalas
 
@@ -1080,22 +1080,22 @@ class Detector:
         frame_height,
         confidence,
     ):
-        """Chamado de dentro do detect() — tem que ser barato. Só copia o
-        recorte (pequeno) e entrega pra thread de aprendizado decidir; nada
-        de disco aqui, pra não atrasar a visão."""
+        """Called from inside detect() — must stay cheap. Only copies the
+        (small) crop and hands it to the learning thread to decide; no
+        disk I/O here, so vision never stalls."""
 
         chave = (frame_width, frame_height)
         categoria = template["category"]
 
-        # Nome-base: o default carrega a resolução em que foi recortado e o
-        # override não, então só o miolo identifica os dois como o mesmo
-        # template — sem isso o mesmo item viraria duas entradas de
-        # fidelidade e o aprendizado regravaria a cada passada.
+        # Base name: default carries the resolution it was cropped at and
+        # override does not, so only the middle identifies both as the same
+        # template — without this the same item would become two fidelity
+        # entries and learning would rewrite on every pass.
         nome = self._base_name(template["name"])
 
-        # Checagem sem lock: leitura de dict é uma operação atômica o
-        # bastante pra esse fim — o pior caso é uma candidata a mais na
-        # fila, que a thread de aprendizado descarta na conferência final.
+        # Lock-free check: dict reads are atomic enough
+        # for this purpose — worst case is one extra candidate in the
+        # queue, which the learning thread drops at final review.
         if confidence <= self._fidelity.get((chave, categoria, nome), 0.0):
             return
 
@@ -1117,7 +1117,7 @@ class Detector:
             pass
 
     def learn_action(self, frame, detection):
-        """Aprende somente a detecção que originou uma ação executada."""
+        """Learns only the detection that originated an executed action."""
 
         if not LEARN_RESOLUTION_TEMPLATES or frame is None:
             return
@@ -1138,8 +1138,8 @@ class Detector:
         )
 
     def _learn_worker(self):
-        """Roda numa thread própria: grava em disco e atualiza os overrides
-        em uso sem bloquear o detect() da thread de visão."""
+        """Runs on its own thread: writes to disk and updates the in-use overrides
+        without blocking the vision thread's detect()."""
 
         while True:
 
@@ -1202,7 +1202,7 @@ class Detector:
 
         with self._learn_lock:
 
-            # Outra candidata pode ter vencido enquanto gravávamos.
+            # Another candidate may have won while we were writing.
             if confidence <= self._fidelity.get(fidelity_id, 0.0):
                 return
 
@@ -1222,11 +1222,11 @@ class Detector:
 
             lista.append(novo)
 
-            # Cache mesclado desta resolução ficou velho: sem isto, a
-            # passada seguinte continuaria usando a versão antiga.
+            # This resolution's merged cache went stale: without this, the
+            # next pass would keep using the old version.
             self._scaled_cache.pop(chave, None)
 
-            # A fila ordenada aponta para os templates do cache antigo.
+            # The ordered queue points at the old cache's templates.
             self._ordem_cache.clear()
 
             self._overrides_versao += 1
@@ -1252,7 +1252,7 @@ class Detector:
         x,
         y,
     ):
-        """Compara em HSV: matiz é circular (distância 179<->0 é 1), pesado por saturação (dessaturado = matiz é ruído); brilho pesa pouco (varia com animação/iluminação)."""
+        """Compares in HSV: hue is circular (distance 179<->0 is 1), weighted by saturation (desaturated = hue is noise); brightness weighs little (varies with animation/lighting)."""
 
         template_height = template["height"]
         template_width = template["width"]
@@ -1265,8 +1265,8 @@ class Detector:
         if roi.shape[:2] != (template_height, template_width):
             return 0.0
 
-        # Só a ROI é convertida: o HSV do template já veio
-        # pronto de _build_template.
+        # Only the ROI is converted: the template HSV already came
+        # ready-made from _build_template.
         roi_hsv = cv2.cvtColor(
             roi,
             cv2.COLOR_BGR2HSV,
@@ -1274,7 +1274,7 @@ class Detector:
 
         template_hsv = template["hsv"]
 
-        # OpenCV usa H em 0..179 — volta completa é 180, distância máxima real é 90.
+        # OpenCV uses H in 0..179 — a full turn is 180, so the real max distance is 90.
         hue_difference = np.abs(
             roi_hsv[:, :, 0] - template_hsv[:, :, 0]
         )
@@ -1294,7 +1294,7 @@ class Detector:
             roi_hsv[:, :, 2] - template_hsv[:, :, 2]
         ) / 255.0
 
-        # Num pixel cinza o matiz não significa nada — por isso o peso por saturação.
+        # On a gray pixel hue means nothing — hence the saturation weighting.
         saturation_weight = np.minimum(
             roi_hsv[:, :, 1],
             template_hsv[:, :, 1],
@@ -1329,7 +1329,7 @@ class Detector:
         frame_width,
         frame_height,
     ):
-        """Converte a ROI fracionária da categoria em pixels: (x1, y1, x2, y2)."""
+        """Converts the category's fractional ROI to pixels: (x1, y1, x2, y2)."""
 
         chave = (category, frame_width, frame_height)
 
@@ -1380,12 +1380,12 @@ class Detector:
         return (x1, y1, x2, y2)
 
     def _na_escala_da_vez(self, template, escalas_ativas, agora):
-        """Esta variante entra na passada?
+        """Does this variant join the pass?
 
-        Override entra sempre (nasceu na resolução do device, não tem pente).
-        Escala já promovida: só a variante dela. Caso contrário, só as variantes
-        ainda não vistas — 1 match por passada em vez dos 5 do pente, com o pente
-        inteiro visto em no máximo 5 passadas."""
+        Overrides always join (born at the device resolution, no comb).
+        Already-promoted scale: only its variant. Otherwise, only
+        not-yet-seen variants — 1 match per pass instead of the comb's 5, with the
+        whole comb seen within 5 passes."""
 
         nome_base = template.get("nome_base")
 
@@ -1401,8 +1401,8 @@ class Detector:
 
         if agora - quando > QUENTES_TTL:
 
-            # Parou de bater há tempo demais para ainda ser a escala
-            # certa (zoom mudou): volta a sondar em vez de ficar cego.
+            # Stopped hitting too long ago to still be the right
+            # scale (zoom changed): resume probing instead of going blind.
             del escalas_ativas[nome_base]
             return True
 
@@ -1412,10 +1412,10 @@ class Detector:
         indice = template.get("indice_escala", 0)
 
         if vistos == completo:
-            # Promovida: só a escala vencedora
+            # Promoted: only the winning scale
             return vistos >> indice & 1
 
-        # Provisória: só escalas não-vistas
+        # Provisional: only unseen scales
         return not (vistos >> indice & 1)
 
     @staticmethod
@@ -1425,8 +1425,8 @@ class Detector:
         confidence,
         agora,
     ):
-        """Registra a escala que bateu. Marca o bit de vistos e compara
-        confiança. Promove quando todas as escalas foram vistas."""
+        """Records the scale that hit. Marks the seen bit and compares
+        confidence. Promotes once every scale has been seen."""
 
         nome_base = template["nome_base"]
         indice = template.get("indice_escala", 0)
@@ -1463,8 +1463,8 @@ class Detector:
         )
 
     def _em_sonda(self, categoria):
-        """Categoria sem nenhuma escala promovida — o pico visto no
-        diagnóstico é de uma escala das cinco, não o melhor possível."""
+        """Category with no promoted scale — the peak seen in the
+        diagnostics is from one of the five scales, not the best possible."""
 
         if self._last_frame_size is None:
             return False
@@ -1486,7 +1486,7 @@ class Detector:
         return True
 
     def _marca_quente(self, chave_categoria, nome, agora):
-        """Quem bateu vai para o início da fila da categoria."""
+        """Recent hitters move to the front of the category queue."""
 
         quentes = self._quentes.setdefault(chave_categoria, {})
 
@@ -1496,16 +1496,16 @@ class Detector:
         quentes[nome] = agora
 
     def _particao_quente(self, chave_categoria, lista, teto, agora):
-        """(quentes, frios) da categoria. O prefixo quente é limitado a
-        teto-2 nomes: sem essa folga, alguns falsos-positivos estáveis nas
-        primeiras posições consumiriam o teto todo frame e a cauda nunca
-        seria procurada."""
+        """(hot, cold) split of the category. The hot prefix is capped at
+        teto-2 names: without that slack, a few stable false positives in the
+        first positions would eat the whole cap every frame and the tail would
+        never be searched."""
 
         cacheada = self._ordem_cache.get(chave_categoria)
 
-        # cacheada[1] is lista: um reload/override troca a lista da
-        # categoria, e a thread de visão regravaria a partição antiga por
-        # cima do clear da thread de aprendizado.
+        # cacheada[1] is lista: a reload/override swaps the category's
+        # list, and the vision thread would rewrite the stale partition over
+        # the learning thread's clear.
         if (
             cacheada is not None
             and cacheada[0] == self._quentes_versao
@@ -1555,9 +1555,9 @@ class Detector:
         return na_frente, frios
 
     def _fila_categoria(self, chave_categoria, lista, sonda, agora):
-        """Fila da categoria: quem bateu há pouco na frente, e a cauda fria
-        girada a cada passada. Sem o giro, o corte por cota deixaria o fim da
-        cauda sem nunca ser procurado."""
+        """Category queue: recent hitters first, cold tail rotated
+        each pass. Without the rotation, the quota cut would leave the tail
+        end never searched."""
 
         teto = CATEGORY_MATCH_BUDGET.get(chave_categoria[1], 0)
 
@@ -1583,7 +1583,7 @@ class Detector:
         )
 
     def detect(self, frame, categories=None):
-        """Detecções aprovadas, ordenadas por confiança (maior primeiro). `categories` filtra a busca (permite a StateMachine procurar 2 templates em vez de 43)."""
+        """Approved detections, ordered by confidence (highest first). `categories` filters the search (lets the StateMachine look for 2 templates instead of 43)."""
 
         self._maybe_reload_templates()
 
@@ -1619,8 +1619,8 @@ class Detector:
 
         self._last_frame_size = chave
 
-        # Frames reduzidos sob demanda (cada template tem sua escala): no
-        # estado UPGRADE, com 4 templates, sai 1 resize e não 7.
+        # Downscaled frames on demand (each template has its scale): in the
+        # UPGRADE state, with 4 templates, that is 1 resize instead of 7.
         coarse_frames = {}
 
         def coarse_for(scale):
@@ -1640,18 +1640,18 @@ class Detector:
 
             return coarse_frames[scale]
 
-        # Templates deste frame por categoria (índice original se já na referência).
+        # This frame's templates per category (original index when already at reference).
         por_categoria = self._templates_for(
             frame_width,
             frame_height,
         )
 
-        # `categories` vem na ordem das regras do estado; a StateMachine age
-        # na primeira que casar, então parar aqui poupa trabalho que nunca
-        # viraria ação (medido: 264ms -> ~20ms quando uma regra de cima casa).
-        # Parada é por categoria, nunca dentro dela (evita perder detecções
-        # repetidas da mesma categoria). Sem filtro, nada é interrompido —
-        # caminho do overlay de diagnóstico e do dataset, que querem a tela inteira.
+        # `categories` comes in the state's rule order; the StateMachine acts on
+        # the first that matches, so stopping here saves work that would never
+        # become an action (measured: 264ms -> ~20ms when an upper rule matches).
+        # Stopping is per category, never inside one (avoids losing repeated
+        # detections of the same category). Without a filter, nothing is cut short —
+        # the diagnostics-overlay and dataset path, which want the whole screen.
         if categories is not None:
 
             ordem = []
@@ -1675,14 +1675,14 @@ class Detector:
 
             parar_na_prioridade = False
 
-        # Sem filtro de categoria, quem chamou quer a tela inteira
-        # (cobertura do main_layouts, overlay de diagnóstico): nem teto de
-        # detecções nem sonda de escala — as duas existem para poupar
-        # trabalho que não viraria ação, e aqui não há ação nenhuma.
+        # Without a category filter, the caller wants the whole screen
+        # (main_layouts coverage, diagnostics overlay): neither detection cap
+        # nor scale probe — both exist to save work that would never become
+        # an action, and here there is no action at all.
         exaustiva = categories is None
 
-        # Quantos templates a passada de fato olhou: é o
-        # número que explica um HUD vazio ("procurou 0").
+        # How many templates the pass actually examined: the
+        # number that explains an empty HUD ("searched 0").
         self.last_searched = 0
         self.last_total = 0
 
@@ -1713,8 +1713,8 @@ class Detector:
                 frame_height,
             )
 
-            # Onde o _match anota o melhor match desta
-            # categoria, para o diagnóstico.
+            # Where _match records this category's best
+            # match, for diagnostics.
             self._debug_category = category
 
             chave_categoria = (chave, category)
@@ -1726,11 +1726,11 @@ class Detector:
 
             sonda = self._sonda.get(chave_categoria, 0)
 
-            # A StateMachine age em UMA detecção por frame: varrer os 86
-            # templates de food depois de já ter o teto de pratos na mão não
-            # muda decisão nenhuma. Corta só DEPOIS de achar, então passada
-            # parcial nunca é confundida com tela vazia (que dispararia o
-            # swipe de exploração). 0 = categoria varrida inteira.
+            # The StateMachine acts on ONE detection per frame: sweeping all 86
+            # food templates after already holding the dish cap changes
+            # no decision. Cuts only AFTER finding, so a partial
+            # pass is never mistaken for an empty screen (which would trigger the
+            # exploration swipe). 0 = fully swept category.
             teto = (
                 0
                 if exaustiva
@@ -1756,10 +1756,10 @@ class Detector:
 
             self.last_total += len(fila)
 
-            # Itens distintos, não candidatos: MAX_MATCHES_PER_TEMPLATE
-            # permite 12 candidatos de um único template, e o teto existe
-            # para a StateMachine ter alternativas de verdade quando
-            # descarta uma detecção (_is_ignored_food).
+            # Distinct items, not candidates: MAX_MATCHES_PER_TEMPLATE
+            # allows 12 candidates from a single template, and the cap exists
+            # so the StateMachine has real alternatives when it
+            # discards a detection (_is_ignored_food).
             achados = set()
 
             olhados = 0
@@ -1834,7 +1834,7 @@ class Detector:
                         agora,
                     )
 
-                    # Caminho do template: /origin/category/name
+                    # Template path: /origin/category/name
                     origin = template.get("origin", "default")
                     template_path = f"/{origin}/{category}/{template['name']}"
 
@@ -1878,10 +1878,10 @@ class Detector:
                             confidence,
                         )
 
-                # Os dois cortes só valem DEPOIS de achar: passada parcial
-                # com detecção não pode ser confundida com tela vazia, que em
-                # NORMAL dispara o swipe de exploração. Nada encontrado =
-                # categoria varrida inteira.
+                # Both cuts apply only AFTER finding: a partial pass
+                # with detections must not be mistaken for an empty screen, which in
+                # NORMAL triggers the exploration swipe. Nothing found =
+                # fully swept category.
                 if achados and (
                     (teto and len(achados) >= teto)
                     or (cota and olhados >= cota)
@@ -1901,10 +1901,10 @@ class Detector:
 
                 secas = self._secas.get(chave_categoria, 0) + 1
 
-                # Categoria sumiu por várias passadas seguidas: pode ser o
-                # zoom da câmera do jogo, que muda a escala de tudo. Remove
-                # apenas as escalas promovidas (vistos == completo), preservando
-                # as provisórias e o acúmulo de confiança.
+                # Category gone for several passes in a row: may be the
+                # game camera zoom, which rescales everything. Removes
+                # only the promoted scales (vistos == completo), keeping
+                # the provisional ones and the accumulated confidence.
                 if secas >= ESCALA_LIBERA_SECAS:
 
                     for nome in list(escalas_ativas.keys()):
@@ -1925,12 +1925,12 @@ class Detector:
             if achou and parar_na_prioridade:
                 break
 
-        # Vários templates da mesma categoria acertam o mesmo ícone — sem
-        # supressão, uma comida vira 5 detecções.
+        # Several templates of the same category hit the same icon — without
+        # suppression, one food item becomes 5 detections.
         if DETECTOR_DEBUG_MISSES:
 
-            # Só as categorias que a passada realmente olhou — com parada por
-            # prioridade, listar as de baixo como "não detectado" seria falso.
+            # Only categories the pass actually examined — with priority
+            # stopping, listing the lower ones as "not detected" would be wrong.
             self._report_misses(
                 set(procuradas) - self._parciais,
                 detections,
@@ -1938,9 +1938,9 @@ class Detector:
 
         detections = self._suppress(detections)
 
-        # Maior confiança primeiro: a StateMachine passa a
-        # agir sobre o MELHOR match, não sobre o primeiro
-        # em ordem alfabética de arquivo.
+        # Highest confidence first: the StateMachine now acts
+        # on the BEST match, not the first one
+        # in filename-alphabetical order.
         detections.sort(
             key=lambda item: item["confidence"],
             reverse=True,
@@ -1956,11 +1956,11 @@ class Detector:
         min_threshold,
         roi,
     ):
-        """Devolve [(x, y, confiança)] em resolução cheia."""
+        """Returns [(x, y, confidence)] at full resolution."""
 
         coarse_template = template["coarse_gray"]
 
-        # Sem estágio grosso: busca direta.
+        # No coarse stage: direct search.
         if coarse_frame is None or coarse_template is None:
 
             return self._match(
@@ -1972,8 +1972,8 @@ class Detector:
                 MAX_MATCHES_PER_TEMPLATE,
             )
 
-        # Estágio 1 (grosso): threshold mais permissivo — a redução degrada
-        # a confiança, e descartar aqui é irreversível.
+        # Stage 1 (coarse): more lenient threshold — downscaling degrades
+        # confidence, and discarding here is irreversible.
         scale = template["coarse_scale"]
 
         coarse_roi = (
@@ -2001,8 +2001,8 @@ class Detector:
         if not coarse_hits:
             return []
 
-        # Estágio 2 (fino): reconfirma cada candidato em resolução cheia
-        # numa janela — a confiança devolvida já é comparável à versão sem estágios.
+        # Stage 2 (fine): re-confirms each candidate at full resolution
+        # in a window — the returned confidence is already comparable to the stageless version.
         results = []
 
         template_height = template["height"]
@@ -2037,7 +2037,7 @@ class Detector:
                 min_threshold,
                 window,
 
-                # Na janela fina só interessa o melhor ponto.
+                # In the fine window only the best point matters.
                 1,
             )
 
@@ -2054,7 +2054,7 @@ class Detector:
         roi,
         max_matches,
     ):
-        """matchTemplate numa região; devolve os máximos locais acima do threshold em coordenada absoluta da imagem."""
+        """matchTemplate in a region; returns local maxima above the threshold in absolute image coordinates."""
 
         x1, y1, x2, y2 = roi
 
@@ -2070,8 +2070,8 @@ class Detector:
 
         region = image[y1:y2, x1:x2]
 
-        # Máscara só é suportada em TM_CCORR_NORMED/TM_SQDIFF; sem máscara
-        # mantemos TM_CCOEFF_NORMED para não mudar a escala dos thresholds.
+        # Masks are only supported in TM_CCORR_NORMED/TM_SQDIFF; without a mask
+        # we keep TM_CCOEFF_NORMED so threshold scales stay unchanged.
         if mask is not None:
 
             result = cv2.matchTemplate(
@@ -2089,8 +2089,8 @@ class Detector:
                 cv2.TM_CCOEFF_NORMED,
             )
 
-        # copy=False: sem isto cada match aloca outra cópia do mapa de
-        # resposta, que no caminho sem estágio grosso tem o tamanho da tela.
+        # copy=False: without this each match allocates another copy of the
+        # response map, which on the no-coarse-stage path is screen-sized.
         result = np.nan_to_num(
             result,
             copy=False,
@@ -2099,8 +2099,8 @@ class Detector:
             neginf=0.0,
         )
 
-        # Máximo bruto antes do corte — é a informação que o threshold
-        # esconde e que o diagnóstico precisa.
+        # Raw maximum before the cutoff — the information the threshold
+        # hides and diagnostics needs.
         if DETECTOR_DEBUG_MISSES and result.size:
 
             if self._debug_category is not None:
@@ -2132,7 +2132,7 @@ class Detector:
 
         confidences = result[ys, xs]
 
-        # Melhores primeiro, para a supressão manter o bom.
+        # Best first, so suppression keeps the good one.
         order = np.argsort(-confidences)
 
         hits = []
@@ -2144,7 +2144,7 @@ class Detector:
 
             confidence = float(confidences[index])
 
-            # Descarta vizinho do mesmo pico.
+            # Drops neighbors of the same peak.
             if any(
                 abs(x - other_x) < template_width * 0.5
                 and abs(y - other_y) < template_height * 0.5
@@ -2160,7 +2160,7 @@ class Detector:
         return hits
 
     def _report_misses(self, wanted, detections):
-        """Por categoria não encontrada, o melhor match visto: F:0.931/0.98 = threshold cortou (baixe o threshold); F:0.412/0.98 = template não parece com a tela (threshold não ajuda)."""
+        """Per missing category, the best match seen: F:0.931/0.98 = threshold cut it (lower the threshold); F:0.412/0.98 = template does not look like the screen (threshold will not help)."""
 
         agora = time.monotonic()
 
@@ -2181,8 +2181,8 @@ class Detector:
 
         if not faltando:
 
-            # Apaga o relatório anterior: texto de problema
-            # já resolvido é pior que texto nenhum.
+            # Clears the previous report: stale problem
+            # text is worse than no text.
             self._miss_text = ""
             self._miss_at = agora
 
@@ -2204,9 +2204,9 @@ class Detector:
             texto += "-" if forma is None else f"{forma:.3f}"
             texto += f"/{corte:.2f}"
 
-            # Cor só quando o formato passou: senão a
-            # comparação de cor nem aconteceu, e um "C:-"
-            # pareceria falha.
+            # Color only when shape passed: otherwise the
+            # color comparison never ran, and a "C:-"
+            # would look like a failure.
             if cor is not None:
                 limite_cor = CATEGORY_COLOR_THRESHOLDS.get(
                     categoria,
@@ -2217,9 +2217,9 @@ class Detector:
                     f"/{limite_cor:.2f}"
                 )
 
-            # Sem escala promovida, o pico acima é de UMA escala das cinco:
-            # ler "0.412" como "o template não parece com a tela" seria
-            # errado, pode ser só a escala que ainda não foi sondada.
+            # Without a promoted scale, the peak above is from ONE of the five scales:
+            # reading "0.412" as "the template does not look like the screen" would be
+            # wrong — it may just be a scale not probed yet.
             if self._em_sonda(categoria):
                 texto += " ~probing"
 
@@ -2234,7 +2234,7 @@ class Detector:
         )
 
     def miss_report(self):
-        """Último relatório, ou "" se ausente ou velho demais (texto de minutos atrás pareceria atual no painel)."""
+        """Latest report, or "" when missing or too old (minutes-old text would look current on the panel)."""
 
         if not DETECTOR_DEBUG_MISSES or not self._miss_text:
             return ""
@@ -2248,7 +2248,7 @@ class Detector:
         return self._miss_text
 
     def _suppress(self, detections):
-        """Mantém, por categoria, a melhor detecção de cada grupo de caixas sobrepostas."""
+        """Keeps, per category, the best detection of each overlapping-box group."""
 
         if len(detections) < 2:
             return detections
@@ -2314,7 +2314,7 @@ class Detector:
 
         return intersection / union
 
-    # Cor por categoria: dá para ver o que é o que sem ler o texto.
+    # Per-category color: shows what is what without reading the text.
     COLORS = {
         "food": (0, 220, 255),
         "upgrade": (0, 255, 0),
@@ -2338,13 +2338,13 @@ class Detector:
 
     DEFAULT_COLOR = (160, 0, 200)
 
-    # Cores do HUD
+    # HUD colors
     HUD_OK = (0, 255, 0)
     HUD_BAD = (0, 0, 255)
     HUD_NEUTRAL = (255, 255, 255)
 
     def _hud_text(self, output, text, y, color, scale=0.8):
-        """Texto com contorno escuro, legível sobre qualquer fundo do jogo."""
+        """Text with a dark outline, legible over any game background."""
 
         for thickness, text_color in (
             (5, (0, 0, 0)),
@@ -2363,31 +2363,31 @@ class Detector:
             )
 
     def _layout_label(self, detection):
-        """Primeira linha do rótulo: de qual layout veio o template que casou."""
+        """First label line: which layout the matching template came from."""
 
         origem = detection.get("origin")
         source = detection.get("source")
 
-        # Detecção que não veio de template (IA/bot_ai.py usa o modelo e não
-        # preenche origin) não tem layout para mostrar.
+        # Detections not from a template (IA/bot_ai.py uses the model and does not
+        # fill origin) have no layout to show.
         if origem not in ("default", "override"):
             return ""
 
         if origem == "override":
 
-            # Específico da resolução: mostra a resolução no lugar do tipo.
-            # O template é sempre da resolução do frame; o nome só confirma.
+            # Resolution-specific: shows the resolution instead of the type.
+            # The template is always from the frame's resolution; the name only confirms it.
             if source is None and self._last_frame_size is not None:
                 source = "x".join(str(n) for n in self._last_frame_size)
 
             return source or "resolution"
 
-        # No default a resolução é procedência: diz em qual tela o recorte
-        # foi tirado, não em qual ele casou.
+        # In default the resolution is provenance: it says on which screen the crop
+        # was taken, not which one it matched.
         return f"default {source}" if source else "default"
 
     def draw(self, frame, detections, stats=None, scale=1.0):
-        """stats: capture_fps, detect_fps, detect_ms, lag, battery, cycle — chaves ausentes não aparecem. `scale` reconverte detecções (em coords de frame cheio) para o frame reduzido que chega aqui, senão as caixas aparecem fora de lugar."""
+        """stats: capture_fps, detect_fps, detect_ms, lag, battery, cycle — missing keys are hidden. `scale` maps detections (in full-frame coords) back to the downscaled frame arriving here, otherwise boxes show up misplaced."""
 
         output = frame
 
@@ -2417,8 +2417,8 @@ class Detector:
             if not SHOW_DETECTION_LABELS:
                 continue
 
-            # Em food o nome do item vale mais que a categoria (são 70+
-            # templates numa categoria só); nas outras a categoria já diz tudo.
+            # In food the item name matters more than the category (70+
+            # templates in a single category); elsewhere the category alone says it all.
             if category == "food":
                 rotulo = self._base_name(detection["name"]).removesuffix(".png")
             else:
@@ -2437,13 +2437,13 @@ class Detector:
                 if linha
             ]
 
-            # Empilha acima da caixa; o piso mantém as duas na tela sem
-            # uma escrever em cima da outra.
+            # Stacked above the box; the floor keeps both on screen without
+            # one writing over the other.
             primeira_y = max(y - 32, 16)
 
             for indice, linha in enumerate(linhas):
 
-                # Contorno escuro + texto colorido.
+                # Dark outline + colored text.
                 for thickness, text_color in (
                     (5, (0, 0, 0)),
                     (1, color),
@@ -2465,9 +2465,9 @@ class Detector:
 
         y = 50
 
-        # Dois números distintos de propósito: a captura pode ir a 60 fps
-        # enquanto o detector faz 3 passadas por segundo — quem manda na
-        # reação do bot é o detector.
+        # Two distinct numbers on purpose: capture can run at 60 fps
+        # while the detector does 3 passes per second — the detector
+        # drives the bot's reaction time.
         if SHOW_FPS:
 
             capture_fps = stats.get("capture_fps")
@@ -2495,8 +2495,8 @@ class Detector:
 
                     label += f"  {detect_ms:.0f} ms"
 
-                # Abaixo de 1/MAX_DETECTION_AGE as detecções já nascem velhas
-                # e a StateMachine para de clicar — mesmo limite da checagem de idade.
+                # Below 1/MAX_DETECTION_AGE detections are born stale
+                # and the StateMachine stops clicking — same limit as the age check.
                 floor = (
                     1.0 / MAX_DETECTION_AGE
                     if MAX_DETECTION_AGE
@@ -2514,7 +2514,7 @@ class Detector:
 
                 y += 40
 
-        # Sem isso, detecção atrasada parece detecção errada.
+        # Without this, a late detection looks like a wrong detection.
         lag = stats.get("lag")
 
         if SHOW_DETECTION_LAG and lag is not None:
@@ -2536,7 +2536,7 @@ class Detector:
 
             y += 40
 
-        # Sessão que morre por bateria descarregada não deixa rastro no log — o bot só para de agir.
+        # A session killed by a drained battery leaves no trace in the log — the bot just stops acting.
         battery = stats.get("battery")
 
         if SHOW_BATTERY and battery:
@@ -2550,8 +2550,8 @@ class Detector:
                 if charging:
                     label += "  charging"
 
-                # Leitura velha é pior que ausente (parece atual); passar do
-                # dobro do intervalo é sinal de adb travado.
+                # A stale reading is worse than a missing one (it looks current); past
+                # twice the interval means adb is stuck.
                 elif age > BATTERY_POLL_INTERVAL * 2:
                     label += f"  ({age:.0f}s stale)"
 
@@ -2566,12 +2566,12 @@ class Detector:
 
                 y += 40
 
-        # Tempo corrido entre reformas é o único número do HUD que mede
-        # progresso (os FPS só dizem que a visão está saudável).
+        # Elapsed time between renovations is the only HUD number measuring
+        # progress (FPS only says vision is healthy).
 
-        # Sem "estado", "não detectou" e "não procurou" ficam idênticos no
-        # overlay; com filtro por estado, saber qual estado e quantos
-        # templates explica um overlay vazio.
+        # Without "state", "did not detect" and "did not search" look identical in the
+        # overlay; with state filtering, knowing which state and how many
+        # templates explains an empty overlay.
         estado = stats.get("state")
 
         if estado:
@@ -2582,9 +2582,9 @@ class Detector:
 
             if procurados is not None:
 
-                # "12/430" em vez de "12": com sonda de escala e teto por
-                # categoria a passada olha de propósito uma fração da lista,
-                # e só "12" pareceria detector quebrado.
+                # "12/430" instead of "12": with scale probing and per-category
+                # caps the pass deliberately examines a fraction of the list,
+                # and bare "12" would look like a broken detector.
                 na_lista = stats.get("searchable")
 
                 label += (
@@ -2602,9 +2602,9 @@ class Detector:
 
             y += 40
 
-        # Quantos defaults já têm equivalente na pasta desta resolução:
-        # é o que diz se a cobertura do device está completa (e, quando
-        # não está, que a busca ainda depende do default reescalado).
+        # How many defaults already have an equivalent in this resolution's folder:
+        # what tells whether device coverage is complete (and, when it
+        # is not, that search still relies on the rescaled default).
         coverage = stats.get("coverage")
 
         if coverage:
@@ -2622,8 +2622,8 @@ class Detector:
 
             y += 40
 
-        # Zero detecções em vermelho — exceto durante settle, onde o worker
-        # pula frames de propósito e isso não é um defeito.
+        # Zero detections in red — except during settle, where the worker
+        # skips frames on purpose and that is not a defect.
         quantas = stats.get("detections")
 
         aguardando = stats.get("waiting_settle")
@@ -2648,8 +2648,8 @@ class Detector:
 
             y += 40
 
-        # Thread do detector morrer tem o mesmo sintoma de tudo o mais (bot
-        # parado) — aqui ela fala.
+        # A dead detector thread has the same symptom as everything else (stalled
+        # bot) — here it speaks up.
         erro = stats.get("vision_error")
 
         if erro:
@@ -2675,8 +2675,8 @@ class Detector:
             if ultimo is not None:
                 label += f"  (last {formata_duracao(ultimo)})"
 
-            # Vermelho só quando há com o que comparar: sem
-            # ciclo anterior, "demorado" não quer dizer nada.
+            # Red only when there is something to compare against: without
+            # a previous cycle, "slow" means nothing.
             travado = (
                 ultimo is not None
                 and corrido > ultimo * CYCLE_STALL_FACTOR

@@ -1,11 +1,11 @@
 """
-Painel de status: bloco fixo reescrito no lugar, sem acumular linhas.
+Fixed status block rewritten in place, without piling up lines.
 
-Responde "o que está acontecendo AGORA" — o log conta a história
-evento a evento, o que exige rolar o terminal para achar a linha atual.
-Painel e log disputam o mesmo terminal, por isso o main baixa o log do
-console para WARNING enquanto o painel está ligado (desligue
-STATUS_PANEL para voltar ao log linha-por-linha).
+Answers "what is happening RIGHT NOW" — the log tells the story
+event by event, which forces scrolling the terminal to find the current line.
+Panel and log fight over the same terminal, so main lowers the console log
+to WARNING while the panel is on (turn off
+STATUS_PANEL to go back to line-by-line logging).
 """
 
 import os
@@ -23,10 +23,10 @@ from core.metrics import formata_duracao
 
 def formata_bateria(leitura):
     """
-    A leitura do BatteryMonitor (nível, carregando, idade) em palavra curta.
+    The BatteryMonitor reading (level, charging, age) as a short word.
 
-    Marca a leitura VELHA em vez de esconder — um número parado parece
-    atual, e é assim que se passa uma hora sem perceber que o adb travou.
+    Flags STALE readings instead of hiding them — a frozen number looks
+    current, and that is how an hour passes without noticing adb hung.
     """
 
     if not leitura:
@@ -48,15 +48,15 @@ def formata_bateria(leitura):
     return texto
 
 
-# Fixo de propósito: a reescrita precisa saber quantas linhas subir, e
-# contar o que foi impresso deixa o desenho torto. A linha de
-# quase-acerto é a única opcional, decidida UMA vez na construção — se
-# entrasse e saísse, deslocaria o bloco e o `\033[nA` subiria errado.
+# Fixed on purpose: rewriting must know how many lines to move up, and
+# counting what was printed skews the layout. The near-miss
+# line is the only optional one, decided ONCE at construction — if it
+# came and went, it would shift the block and `\033[nA` would move up wrong.
 LINHAS_BASE = 5
 
 
 class StatusPanel:
-    """Bloco de status reescrito no lugar; `update(...)` decide sozinho quando redesenhar."""
+    """In-place rewritten status block; `update(...)` decides on its own when to redraw."""
 
     def __init__(
         self,
@@ -68,8 +68,8 @@ class StatusPanel:
 
         self.device = device or "?"
 
-        # "Sem deteccao" só faz sentido com DETECTOR_DEBUG_MISSES ligado
-        # (sem ele o detector nem calcula o melhor match).
+        # "No detection" only makes sense with DETECTOR_DEBUG_MISSES on
+        # (without it the detector does not even compute the best match).
         self.misses_line = (
             DETECTOR_DEBUG_MISSES
             if misses_line is None
@@ -87,10 +87,18 @@ class StatusPanel:
         self.desenhado = False
         self.ultimo = 0.0
 
+        # Last drawn key: no change, no redraw.
+        # Each redraw competes with log lines landing in the
+        # middle of the block and breaking in-place rewrite — the
+        # scrollback becomes a graveyard of old blocks. The
+        # 30s heartbeat keeps the times ("running", "ago")
+        # reasonably fresh even when idle.
+        self._chave = None
+
         self.iniciado = time.monotonic()
 
-        # Sem ANSI (arquivo, pipe, log de CI) a sequência de cursor
-        # viraria lixo no meio do texto; aí o painel imprime uma vez e se cala.
+        # Without ANSI (file, pipe, CI log) the cursor sequence
+        # would become garbage amid the text; then the panel prints once and stays quiet.
         self.ansi = self._suporta_ansi()
 
     def _suporta_ansi(self):
@@ -108,9 +116,9 @@ class StatusPanel:
         if platform.system() != "Windows":
             return True
 
-        # O console legado do Windows só interpreta ANSI depois de
-        # ENABLE_VIRTUAL_TERMINAL_PROCESSING; sem ligar, o painel
-        # apareceria como "←[2K" na tela.
+        # The legacy Windows console only interprets ANSI after
+        # ENABLE_VIRTUAL_TERMINAL_PROCESSING; without it, the panel
+        # would show up as "←[2K" on screen.
         try:
 
             import ctypes
@@ -139,7 +147,7 @@ class StatusPanel:
             return False
 
     def _largura(self):
-        """Largura útil do terminal — linha mais comprida QUEBRA em duas e desalinha a contagem de `\033[nA`."""
+        """Usable terminal width — a longer line WRAPS in two and misaligns the `\033[nA` count."""
 
         try:
             colunas = shutil.get_terminal_size().columns
@@ -147,7 +155,7 @@ class StatusPanel:
         except Exception:
             return 100
 
-        # -1: escrever na última coluna já provoca quebra em alguns terminais.
+        # -1: writing in the last column already wraps on some terminals.
         return max(20, colunas - 1)
 
     def _linhas(self, resumo, extra=None, misses=None):
@@ -156,8 +164,8 @@ class StatusPanel:
 
         acao_ha = resumo.get("acao_ha")
 
-        # "há quanto tempo" é o que diferencia bot trabalhando
-        # de bot parado numa ação que deu certo uma vez.
+        # "how long ago" is what tells a working bot apart
+        # from a bot idled on an action that succeeded once.
         if acao_ha is not None and acao_ha > 1.0:
             acao = f"{acao}  ({acao_ha:.0f}s ago)"
 
@@ -181,8 +189,8 @@ class StatusPanel:
 
         linhas.append(rodape)
 
-        # Só existe com o debug ligado; aparece sempre (mesmo sem nada a
-        # relatar) porque o bloco tem altura fixa.
+        # Only exists with debug on; always shown (even with nothing to
+        # report) because the block has fixed height.
         if self.misses_line:
 
             linhas.append(
@@ -191,8 +199,8 @@ class StatusPanel:
                 else "No detection: —"
             )
 
-        # Trava o tamanho: uma linha nova sem ajustar a conta comeria a
-        # linha de cima em vez de falhar visivelmente.
+        # Locks the size: a new line without adjusting the count would eat the
+        # line above instead of failing visibly.
         assert len(linhas) == self.linhas, (
             len(linhas),
             self.linhas,
@@ -208,20 +216,40 @@ class StatusPanel:
         ]
 
     def update(self, resumo, extra=None, misses=None, force=False):
-        """Redesenha se já passou o intervalo. `resumo` é StateMachine.summary(), `misses` é Detector.miss_report()."""
+        """Redraws if the interval elapsed. `resumo` is StateMachine.summary(), `misses` is Detector.miss_report()."""
 
         agora = time.monotonic()
 
         if not force and agora - self.ultimo < self.interval:
             return
 
+        # Action/state/counts + misses define the content;
+        # "extra" (fps, battery) fluctuates on its own and does not justify
+        # a redraw — see note in __init__.
+        chave = (
+            resumo.get("estado"),
+            resumo.get("acao"),
+            resumo.get("acoes"),
+            resumo.get("voos"),
+            resumo.get("reformas"),
+            misses,
+        )
+
+        if (
+            not force
+            and chave == self._chave
+            and agora - self.ultimo < 30
+        ):
+            return
+
         self.ultimo = agora
+        self._chave = chave
 
         linhas = self._linhas(resumo, extra, misses)
 
         if not self.ansi:
 
-            # Sem ANSI, imprime UMA vez e para, em vez do bloco repetido mil vezes.
+            # Without ANSI, print ONCE and stop, instead of the block repeated a thousand times.
             if not self.desenhado:
 
                 self.stream.write("\n".join(linhas) + "\n")
@@ -235,12 +263,12 @@ class StatusPanel:
 
         if self.desenhado:
 
-            # Sobe ao topo do bloco anterior.
+            # Move up to the top of the previous block.
             saida.append(f"\033[{self.linhas}A")
 
         for linha in linhas:
 
-            # \033[2K limpa a linha inteira, senão o rabo do texto anterior fica na tela.
+            # \033[2K clears the whole line, otherwise the tail of the previous text stays on screen.
             saida.append(f"\r\033[2K{linha}\n")
 
         self.stream.write("".join(saida))
@@ -249,7 +277,7 @@ class StatusPanel:
         self.desenhado = True
 
     def close(self):
-        """Deixa o cursor abaixo do bloco, para log de encerramento/traceback não escrever em cima."""
+        """Leaves the cursor below the block, so shutdown/traceback logs do not write over it."""
 
         if self.desenhado and self.ansi:
 

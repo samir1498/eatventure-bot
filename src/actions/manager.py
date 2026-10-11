@@ -1,4 +1,4 @@
-"""ActionManager: despacho por tabela, execução assíncrona em thread própria."""
+"""ActionManager: table-driven dispatch, async execution on its own thread."""
 
 import queue
 import threading
@@ -25,17 +25,17 @@ from core.config import (
 logger = log.get("action")
 
 
-CLICK = "click"        # toque no centro da detecção
-REPEAT = "repeat"      # vários toques
-PRESS = "press"        # toque longo
-DISMISS = "dismiss"    # tap em ponto fixo
-HOLD = "hold"          # toque mantido em ponto fixo
-SCROLL = "scroll"      # rola tela até fim
+CLICK = "click"        # tap at the detection center
+REPEAT = "repeat"      # several taps
+PRESS = "press"        # long tap
+DISMISS = "dismiss"    # tap at a fixed point
+HOLD = "hold"          # held tap at a fixed point
+SCROLL = "scroll"      # scroll screen to the end
 
-SEM_DETECCAO = {DISMISS, HOLD, SCROLL}  # Ações sem detecção
+SEM_DETECCAO = {DISMISS, HOLD, SCROLL}  # Actions without detection
 
 
-# Tabela de ações: nome -> comportamento (deduplicação de handlers)
+# Action table: name -> behavior (handler deduplication)
 ACTION_TABLE = {
     "click": CLICK,
     "food": CLICK,
@@ -57,17 +57,17 @@ ACTION_TABLE = {
 
     "upgrade_food": PRESS,
 
-    "gray_max": DISMISS,  # Fechar painel indesejado com tap
-    "dismiss": HOLD,      # Idem mas com toque mantido
+    "gray_max": DISMISS,  # Close unwanted panel with a tap
+    "dismiss": HOLD,      # Same but with a held tap
 
-    "gray_coin": DISMISS,  # Tap em ponto fixo diferente (ACTION_POINTS)
+    "gray_coin": DISMISS,  # Tap at a different fixed point (ACTION_POINTS)
 
-    "scroll_bottom": SCROLL,  # Rola até vazio (não fecha nada)
+    "scroll_bottom": SCROLL,  # Scroll to empty (closes nothing)
 }
 
 
 def ponto_fixo(action):
-    """Ponto em coordenadas de REFERÊNCIA. Função de módulo para sincronizar dataset e despacho."""
+    """Point in REFERENCE coordinates. Module-level function to keep dataset and dispatch in sync."""
 
     return ACTION_POINTS.get(action, DISMISS_POINT)
 
@@ -78,7 +78,7 @@ class ActionManager:
 
         self.android = AndroidActions(serial)
 
-        # Detecção em frame coords, toque em device coords (podem diferir se stream reduzido)
+        # Detection in frame coords, tap in device coords (may differ if stream is scaled down)
         self.device_size = None
         self.frame_size = None
 
@@ -90,7 +90,7 @@ class ActionManager:
         self.busy = False
         self.busy_lock = threading.Lock()
 
-        # Quando a última ação terminou (settle é contado daqui, não da submissão)
+        # When the last action finished (settle counts from here, not from submission)
         self.last_finished_at = 0.0
 
     def start(self):
@@ -136,7 +136,7 @@ class ActionManager:
 
         self.running = False
 
-        # Destrava o worker se estiver esperando na fila.
+        # Unblock the worker if it is waiting on the queue.
         try:
             self.queue.put_nowait(None)
 
@@ -152,7 +152,7 @@ class ActionManager:
             self.thread = None
 
     def set_frame_size(self, width, height):
-        """Resolução em que as detecções estão sendo calculadas."""
+        """Resolution the detections are computed at."""
 
         size = (width, height)
 
@@ -190,7 +190,7 @@ class ActionManager:
         )
 
     def _from_reference(self, x, y):
-        """Resolução de referência (onde os pontos fixos foram anotados) -> device."""
+        """Reference resolution (where the fixed points were annotated) -> device."""
 
         if not self.device_size:
             return int(x), int(y)
@@ -203,7 +203,7 @@ class ActionManager:
         )
 
     def _reference_to_frame(self, x, y):
-        """Referência -> FRAME. Usado só para o rótulo do dataset, não para tocar."""
+        """Reference -> FRAME. Only used for the dataset label, not for tapping."""
 
         if not self.frame_size:
             return int(x), int(y)
@@ -216,10 +216,10 @@ class ActionManager:
         )
 
     def target_frame(self, action, detection):
-        """Onde a ação toca, em coords de FRAME (para o dataset). None se não há alvo pontual (scroll).
+        """Where the action taps, in FRAME coords (for the dataset). None when there is no point target (scroll).
 
-        Separada de _dispatch: o toque real converte direto de referência
-        para device, sem passar pelo frame (evita arredondamento em dinheiro real).
+        Separate from _dispatch: the real tap converts directly from reference
+        to device, without going through the frame (avoids rounding on real money).
         """
 
         kind = ACTION_TABLE.get(action)
@@ -250,7 +250,7 @@ class ActionManager:
             return self.busy
 
     def execute(self, action, detection):
-        """Enfileira uma ação (não bloqueia). False se já há ação em andamento."""
+        """Enqueues an action (non-blocking). False if an action is already in progress."""
 
         kind = ACTION_TABLE.get(action)
 
@@ -328,9 +328,9 @@ class ActionManager:
 
                 with self.busy_lock:
 
-                    # Antes de liberar o busy: quem acordar
-                    # vendo "livre" precisa ver também QUANDO
-                    # ficou livre.
+                    # Before releasing busy: whoever wakes up
+                    # seeing "free" must also see WHEN
+                    # it became free.
                     self.last_finished_at = time.monotonic()
 
                     self.busy = False
@@ -403,7 +403,7 @@ class ActionManager:
         self.android.click(x, y)
 
     def _repeat(self, name, x, y):
-        """N cliques num único comando adb (evita overhead de N processos)."""
+        """N clicks in a single adb command (avoids N-process overhead)."""
 
         logger.info(
             "%s -> %d clicks (%d, %d)",
@@ -416,7 +416,7 @@ class ActionManager:
         self.android.tap_many(x, y, UPGRADE_ITEM_CLICKS)
 
     def _hold(self, name, x, y):
-        """Toque mantido curto em ponto fixo (diferente de _press, que segura no centro da detecção)."""
+        """Short held tap at a fixed point (unlike _press, which holds at the detection center)."""
 
         logger.info(
             "%s -> hold (%d, %d) for %.2fs",
@@ -449,7 +449,7 @@ class ActionManager:
         )
 
     def _scroll_bottom(self, name):
-        """Sequência de swipes até o fim da tela. Roda na thread de ação, não bloqueia o loop principal."""
+        """Swipe sequence to the end of the screen. Runs on the action thread, does not block the main loop."""
 
         logger.info(
             "%s -> %d swipes '%s' (scrolling to end)",

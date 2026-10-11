@@ -1,7 +1,7 @@
 """
-Testes da máquina de estados. Não precisa de device: o ActionManager é
-falso e o relógio é controlado, então dá para testar cooldown, timeout
-de estado e prioridade sem esperar em tempo real.
+State-machine tests. No device needed: the ActionManager is
+fake and the clock is controlled, so cooldown, state
+timeouts, and priority can be tested without waiting in real time.
 """
 
 import sys
@@ -20,6 +20,8 @@ from core.config import (                         # noqa: E402
     DISMISS_ATTEMPTS_BEFORE_SCROLL,
     EXPLORATION_DELAY,
     EXPLORATION_DELAY_AFTER_ACTION,
+    GRAY_STUCK_UPDATES,
+    GRAY_SUPPRESS_UPDATES,
     MAX_DETECTION_AGE,
     REPEATED_ACTION_WARNING,
     STATE_ENTRY_SETTLE,
@@ -75,7 +77,7 @@ class FakeActions:
 
         return self.busy
 
-    # Conveniência para os testes
+    # Test convenience
     @property
     def actions(self):
 
@@ -98,7 +100,7 @@ def detection(category, confidence=0.99, x=100, y=200):
 
 
 def build():
-    """Devolve (machine, actions, clock) com o cooldown já vencido, para o primeiro update poder agir."""
+    """Returns (machine, actions, clock) with cooldown already expired, so the first update can act."""
 
     clock = Clock()
 
@@ -108,7 +110,7 @@ def build():
 
     machine = sm.StateMachine(actions)
 
-    # Deixa o cooldown vencido.
+    # Leaves cooldown expired.
     machine.last_action_time = clock.now - 100
 
     return machine, actions, clock
@@ -128,7 +130,7 @@ def test_prioridade_upgrade_vence_food():
 
 
 def test_fechar_vem_antes_do_jogo():
-    """close/open_store/gray_max fecham o que não deveria estar aberto: prioridade sobre plane e food."""
+    """close/open_store/gray_max close what shouldn't be open: priority over plane and food."""
 
     machine, actions, _ = build()
 
@@ -139,7 +141,7 @@ def test_fechar_vem_antes_do_jogo():
 
     assert actions.actions == ["close"], actions.actions
 
-    # Fechar uma aba não muda de estado.
+    # Closing a tab doesn't change state.
     assert machine.state == sm.NORMAL, machine.state
 
 
@@ -147,11 +149,11 @@ def test_uma_acao_por_cooldown():
 
     machine, actions, clock = build()
 
-    detections = [detection("open_store")]
+    detections = [detection("box")]
 
     machine.update(detections)
 
-    # Segundo frame imediatamente depois: cooldown barra.
+    # Second frame right after: cooldown blocks.
     machine.update(detections)
 
     assert len(actions.calls) == 1, actions.calls
@@ -164,7 +166,7 @@ def test_uma_acao_por_cooldown():
 
 
 def test_acao_em_andamento_bloqueia():
-    """O long press de comida dura 4s: enquanto roda, nenhum outro clique pode ser enfileirado."""
+    """The food long press lasts 4s: while it runs, no other click may be queued."""
 
     machine, actions, _ = build()
 
@@ -177,13 +179,13 @@ def test_acao_em_andamento_bloqueia():
 
 
 def test_timeout_do_estado_volta_para_normal():
-    """Antes, um modal sem template travava o bot para sempre: RENOVATE só saía achando a moeda."""
+    """Before, a modal without a template stalled the bot forever: RENOVATE only exited on finding the coin."""
 
     machine, actions, clock = build()
 
     machine._enter(sm.RENOVATE)
 
-    # Nada na tela: sem timeout, ficaria preso aqui.
+    # Nothing on screen: without a timeout, it would be stuck here.
     machine.update([])
 
     assert machine.state == sm.RENOVATE, machine.state
@@ -246,8 +248,8 @@ def test_upgrade_permanece_enquanto_houver_item():
 
     machine._enter(sm.UPGRADE)
 
-    # Painel abre com animação: STATE_ENTRY_SETTLE segura a mão antes de
-    # agir. Ver test_upgrade_nao_fecha_no_meio_da_animacao.
+    # Panel opens with an animation: STATE_ENTRY_SETTLE holds back before
+    # acting. See test_upgrade_nao_fecha_no_meio_da_animacao.
     clock.advance(STATE_ENTRY_SETTLE[sm.UPGRADE] + 0.01)
 
     machine.update([detection("up_upgrade")])
@@ -255,7 +257,7 @@ def test_upgrade_permanece_enquanto_houver_item():
     assert actions.actions == ["upgrade_item"], actions.actions
     assert machine.state == sm.UPGRADE, machine.state
 
-    # Sem mais itens: fecha e volta.
+    # No more items: closes and returns.
     clock.advance(ACTION_COOLDOWN + 0.01)
 
     machine.update([detection("close")])
@@ -266,11 +268,11 @@ def test_upgrade_permanece_enquanto_houver_item():
 
 def test_upgrade_nao_fecha_no_meio_da_animacao():
     """
-    O bug relatado: ao abrir a tela de upgrade, o bot fechava ela na hora.
-    Enquanto o painel entra, o "X" já casa com o template e os botões de
-    upgrade ainda não — a regra 1 não acha nada, a regra 2 acha, e o bot
-    desfaz o que acabou de fazer. ACTION_SETTLE não cobre isto: é contado
-    do TOQUE que abriu, dimensionado para a animação de FECHAR.
+    The reported bug: on opening the upgrade screen, the bot closed it right away.
+    While the panel slides in, the "X" already matches the template and the
+    upgrade buttons don't yet — rule 1 finds nothing, rule 2 finds it, and the bot
+    undoes what it just did. ACTION_SETTLE doesn't cover this: it's counted
+    from the TAP that opened it, sized for the CLOSE animation.
     """
 
     machine, actions, clock = build()
@@ -284,8 +286,8 @@ def test_upgrade_nao_fecha_no_meio_da_animacao():
 
     machine._enter(sm.UPGRADE)
 
-    # No meio da animação, o "X" é a única coisa que casa. Já passado o
-    # ACTION_SETTLE, para provar que é a espera de ENTRADA que segura.
+    # Mid-animation, the "X" is the only thing matching. Past
+    # ACTION_SETTLE already, to prove it's the ENTRY wait holding.
     clock.advance(ACTION_SETTLE + 0.01)
 
     machine.update([detection("close")])
@@ -296,7 +298,7 @@ def test_upgrade_nao_fecha_no_meio_da_animacao():
 
     assert machine.state == sm.UPGRADE, machine.state
 
-    # Painel montado: agora o upgrade aparece e é ele que vence.
+    # Panel built: now the upgrade shows and it wins.
     clock.advance(espera)
 
     machine.update([
@@ -310,7 +312,7 @@ def test_upgrade_nao_fecha_no_meio_da_animacao():
 
 
 def test_espera_de_entrada_cabe_no_timeout_do_estado():
-    """A espera de entrada come o tempo que o bot tem para agir dentro do estado: mesmo relógio."""
+    """The entry wait eats the time the bot has to act inside the state: same clock."""
 
     for estado, espera in STATE_ENTRY_SETTLE.items():
 
@@ -328,8 +330,8 @@ def test_espera_de_entrada_cabe_no_timeout_do_estado():
 
 def test_gray_coin_dispensa_como_o_gray_max():
     """
-    `gray_coin` faz o que `gray_max` faz — dispensa e volta a NORMAL. O
-    ponto tocado é assunto do ActionManager
+    `gray_coin` does what `gray_max` does — dismisses and returns to NORMAL. The
+    tapped point is the ActionManager's business
     (test_pipeline::test_gray_coin_toca_no_ponto_proprio).
     """
 
@@ -344,7 +346,7 @@ def test_gray_coin_dispensa_como_o_gray_max():
             actions.actions,
         )
 
-        # E em FOOD também: é lá que o painel esgotado aparece.
+        # And in FOOD too: that's where the depleted panel shows.
         machine, actions, _ = build()
 
         machine._enter(sm.FOOD)
@@ -361,15 +363,15 @@ def test_gray_coin_dispensa_como_o_gray_max():
 
 def test_dispensa_em_food_acontece_antes_de_desistir():
     """
-    Em FOOD, a dispensa tem de ser avaliada ANTES do _wait_or_give_up, que
-    pode chamar _enter(NORMAL). Se a dispensa vier depois, a ação sai
-    quando a máquina JÁ SE CONSIDERA em NORMAL — decidindo por regra de
-    FOOD num estado que não é mais FOOD, rotulando a amostra errada.
+    In FOOD, the dismiss must be evaluated BEFORE _wait_or_give_up, which
+    may call _enter(NORMAL). If the dismiss comes after, the action fires
+    when the machine ALREADY CONSIDERS itself in NORMAL — deciding by a
+    FOOD rule in a state that's no longer FOOD, mislabeling the sample.
     """
 
     machine, actions, clock = build()
 
-    # Espia o estado NO MOMENTO em que a ação é despachada.
+    # Spies the state AT THE MOMENT the action is dispatched.
     estados = []
 
     original = actions.execute
@@ -384,7 +386,7 @@ def test_dispensa_em_food_acontece_antes_de_desistir():
 
     machine._enter(sm.FOOD)
 
-    # Timer de desistência JÁ VENCIDO: situação em que _wait_or_give_up agiria.
+    # Give-up timer ALREADY EXPIRED: the situation where _wait_or_give_up would act.
     machine.up_food_wait_start = clock.now
 
     clock.advance(UP_FOOD_WAIT + 0.1)
@@ -410,7 +412,7 @@ def test_food_desiste_depois_da_espera():
     assert actions.actions == ["upgrade_food"], actions.actions
     assert machine.state == sm.FOOD, machine.state
 
-    # Nenhum up_food novo apareceu.
+    # No new up_food showed up.
     clock.advance(UP_FOOD_WAIT + 0.1)
 
     machine.update([])
@@ -485,15 +487,15 @@ def test_exploracao_faz_swipe_e_inverte():
 
     assert len(swipes) == machine.max_swipes, swipes
 
-    # Não fixa QUAL direção começa (é ajuste de config):
-    # verifica que todas foram na mesma.
+    # Doesn't pin WHICH direction starts (it's a config tweak):
+    # verifies all went the same way.
     primeira = swipes[0][1]
 
     assert all(
         call[1] == primeira for call in swipes
     ), swipes
 
-    # Passou do limite: inverte.
+    # Past the limit: flips.
     clock.advance(machine.exploration_delay + 0.1)
 
     machine.update([])
@@ -516,15 +518,15 @@ def swipes_de(actions):
 
 def test_achar_algo_adia_a_exploracao_sem_cancelar():
     """
-    Achar algo ADIA o swipe, não o cancela.
+    Finding something POSTPONES the swipe, doesn't cancel it.
 
-    Antes, achar zerava a exploração, então o swipe só saía
-    depois de 5 s de tela COMPLETAMENTE vazia. Agora o swipe é
-    periódico e o que muda é o intervalo:
+    Before, finding reset exploration, so the swipe only fired
+    after 5 s of a COMPLETELY empty screen. Now the swipe is
+    periodic and what changes is the interval:
 
-        não achou nada .... a cada EXPLORATION_DELAY        (5 s)
-        achou algo ........ espera EXPLORATION_DELAY_AFTER_ACTION
-                            (15 s) e volta ao ritmo de 5 s
+        found nothing ..... every EXPLORATION_DELAY                (5 s)
+        found something ... waits EXPLORATION_DELAY_AFTER_ACTION
+                            (15 s) then back to the 5 s rhythm
     """
 
     machine, actions, clock = build()
@@ -534,17 +536,17 @@ def test_achar_algo_adia_a_exploracao_sem_cancelar():
 
     clock.advance(machine.exploration_delay + 0.1)
 
-    machine.update([detection("open_store")])
+    machine.update([detection("box")])
 
-    # No frame em que achou, não rola.
+    # On the frame where it found, no scroll.
     assert not swipes_de(actions), actions.calls
 
-    # O intervalo em vigor passou a ser o longo.
+    # The interval in force became the long one.
     assert machine.exploration_interval() == (
         EXPLORATION_DELAY_AFTER_ACTION
     )
 
-    # Passado o intervalo CURTO, ainda não: está adiado.
+    # Past the SHORT interval, still not: it's postponed.
     clock.advance(machine.exploration_delay + 0.1)
 
     machine.update([])
@@ -554,7 +556,7 @@ def test_achar_algo_adia_a_exploracao_sem_cancelar():
         "está valendo"
     )
 
-    # Passado o LONGO, rola.
+    # Past the LONG one, scrolls.
     clock.advance(
         EXPLORATION_DELAY_AFTER_ACTION
         - machine.exploration_delay
@@ -564,7 +566,7 @@ def test_achar_algo_adia_a_exploracao_sem_cancelar():
 
     assert len(swipes_de(actions)) == 1, actions.calls
 
-    # E volta ao ritmo curto.
+    # And back to the short rhythm.
     assert machine.exploration_interval() == (
         machine.exploration_delay
     )
@@ -578,13 +580,13 @@ def test_achar_algo_adia_a_exploracao_sem_cancelar():
 
 def test_achar_algo_nao_zera_o_ciclo_de_varredura():
     """
-    O ciclo é 5 para um lado e 5 para o outro, e achar algo no
-    meio NÃO devolve a contagem para o começo.
+    The cycle is 5 one way and 5 the other, and finding something in
+    the middle does NOT reset the count.
 
-    Zerava antes, e o efeito era o bot varrer sempre o mesmo
-    pedaço da tela: como quase todo swipe revela algum alvo, a
-    contagem voltava a zero antes de a volta fechar e a metade
-    distante do restaurante nunca era visitada.
+    It used to reset, and the effect was the bot always sweeping the same
+    screen slice: since almost every swipe reveals some target, the
+    count went back to zero before the return leg closed and the far
+    half of the restaurant was never visited.
     """
 
     machine, actions, clock = build()
@@ -592,7 +594,7 @@ def test_achar_algo_nao_zera_o_ciclo_de_varredura():
     machine.action_settle = 0.0
     machine.action_cooldown = 0.0
 
-    # Dois swipes, para ficar no MEIO da volta.
+    # Two swipes, to sit in the MIDDLE of the leg.
     for _ in range(2):
 
         clock.advance(machine.exploration_delay + 0.1)
@@ -604,12 +606,12 @@ def test_achar_algo_nao_zera_o_ciclo_de_varredura():
     contagem = machine.swipe_count
     direcao = machine.swipe_direction
 
-    # Acha algo.
+    # Finds something.
     #
-    # `box` de propósito: a regra dela é (box, open_box, None),
-    # ou seja PERMANECE em NORMAL. Com `food` a máquina sairia
-    # para o estado FOOD, onde a exploração nem roda — e o teste
-    # mediria outra coisa.
+    # `box` on purpose: its rule is (box, open_box, None),
+    # i.e. it STAYS in NORMAL. With `food` the machine would leave
+    # for the FOOD state, where exploration doesn't even run — and the test
+    # would measure something else.
     clock.advance(0.1)
 
     machine.update([detection("box")])
@@ -621,7 +623,7 @@ def test_achar_algo_nao_zera_o_ciclo_de_varredura():
 
     assert machine.swipe_direction == direcao
 
-    # O próximo swipe CONTINUA a volta.
+    # The next swipe CONTINUES the leg.
     clock.advance(EXPLORATION_DELAY_AFTER_ACTION + 0.1)
 
     machine.update([])
@@ -635,8 +637,8 @@ def test_achar_algo_nao_zera_o_ciclo_de_varredura():
 
 def test_varredura_fecha_a_volta_e_inverte_indefinidamente():
     """
-    5 para um lado, 5 para o outro, sem parar — inclusive
-    quando o bot acha algo a cada volta, que é o caso real.
+    5 one way, 5 the other, nonstop — even
+    when the bot finds something every leg, which is the real case.
     """
 
     machine, actions, clock = build()
@@ -646,9 +648,9 @@ def test_varredura_fecha_a_volta_e_inverte_indefinidamente():
 
     for volta in range(12):
 
-        # Acha algo entre um swipe e o outro, sempre.
+        # Finds something between one swipe and the next, always.
         #
-        # `box` permanece em NORMAL (ver o teste acima).
+        # `box` stays in NORMAL (see the test above).
         clock.advance(0.1)
 
         machine.update([detection("box")])
@@ -661,7 +663,7 @@ def test_varredura_fecha_a_volta_e_inverte_indefinidamente():
 
     assert len(direcoes) == 12, direcoes
 
-    # Blocos de max_swipes na mesma direção, alternando.
+    # Blocks of max_swipes in the same direction, alternating.
     primeira = direcoes[0]
 
     esperado = [
@@ -675,7 +677,7 @@ def test_varredura_fecha_a_volta_e_inverte_indefinidamente():
 
 
 def test_categorias_do_estado_sao_reduzidas():
-    """Faz a passada do detector cair de ~264ms para ~16ms dentro da tela de upgrade."""
+    """Makes the detector pass drop from ~264ms to ~16ms inside the upgrade screen."""
 
     machine, _, _ = build()
 
@@ -692,9 +694,9 @@ def test_categorias_do_estado_sao_reduzidas():
 
 def test_categorias_vem_na_ordem_da_prioridade():
     """
-    A ORDEM é contrato: o detector para na primeira categoria que
-    encontrar, então ordem embaralhada faria o bot agir na regra errada
-    — e `food` (2/3 dos templates) deixaria de ser a última.
+    ORDER is contract: the detector stops at the first category it
+    finds, so a shuffled order would make the bot act on the wrong rule
+    — and `food` (2/3 of templates) would stop being last.
     """
 
     machine, _, _ = build()
@@ -708,16 +710,16 @@ def test_categorias_vem_na_ordem_da_prioridade():
 
     assert categorias == esperada, categorias
 
-    # Sem repetição: categoria repetida seria template
-    # procurado duas vezes na mesma passada.
+    # No repeats: a repeated category would mean a template
+    # searched twice in the same pass.
     assert len(categorias) == len(set(categorias)), categorias
 
-    # E `food` continua no fim, que é onde a economia vive.
+    # And `food` stays last, where the savings live.
     assert categorias[-1] == "food", categorias
 
 
 def test_estado_nao_vaza_variavel():
-    """up_food_wait_start era compartilhada entre FOOD e NEW_POINT."""
+    """up_food_wait_start was shared between FOOD and NEW_POINT."""
 
     machine, _, clock = build()
 
@@ -734,11 +736,11 @@ def test_estado_nao_vaza_variavel():
 
 def test_up_food_em_normal_evolui_a_comida():
     """
-    up_food em NORMAL faz o long press de evolução, igual a FOOD. ESCOLHA
-    DELIBERADA: não é o que parece "seguro" — GASTA MOEDA a cada painel
-    aberto sem querer e trava o bot por UPGRADE_FOOD_PRESS segundos. A
-    alternativa (dispensar em ponto neutro) é trocar para "dismiss" em
-    NORMAL_RULES — ação já implementada e testada.
+    up_food in NORMAL does the evolve long press, same as FOOD. DELIBERATE
+    CHOICE: not what looks "safe" — it SPENDS COINS on every accidentally
+    opened panel and stalls the bot for UPGRADE_FOOD_PRESS seconds. The
+    alternative (dismiss at a neutral point) is switching to "dismiss" in
+    NORMAL_RULES — an already implemented and tested action.
     """
 
     machine, actions, _ = build()
@@ -747,12 +749,12 @@ def test_up_food_em_normal_evolui_a_comida():
 
     assert actions.actions == ["upgrade_food"], actions.actions
 
-    # A regra não declara próximo estado: segue em NORMAL.
+    # The rule declares no next state: stays in NORMAL.
     assert machine.state == sm.NORMAL, machine.state
 
 
 def test_up_food_faz_o_mesmo_em_normal_e_em_food():
-    """Existe para o dia em que alguém "corrigir" um dos dois lados sem olhar o outro."""
+    """Exists for the day someone "fixes" one side without looking at the other."""
 
     normal, acoes_normal, _ = build()
 
@@ -770,7 +772,7 @@ def test_up_food_faz_o_mesmo_em_normal_e_em_food():
 
 
 def test_up_food_perde_para_o_close():
-    """O X fecha o painel sem gastar nada, então vem antes do long press de evolução."""
+    """The X closes the panel for free, so it comes before the evolve long press."""
 
     machine, actions, _ = build()
 
@@ -783,7 +785,7 @@ def test_up_food_perde_para_o_close():
 
 
 def test_up_food_vence_acao_de_jogo():
-    """Fechar o que não deveria estar aberto vem antes de qualquer ação de jogo."""
+    """Closing what shouldn't be open comes before any game action."""
 
     machine, actions, _ = build()
 
@@ -797,7 +799,7 @@ def test_up_food_vence_acao_de_jogo():
 
 
 def test_acao_repetida_gera_aviso():
-    """NORMAL não tem timeout: uma regra que dispara sem resolver repetiria para sempre em silêncio."""
+    """NORMAL has no timeout: a rule firing without resolving would repeat forever in silence."""
 
     import logging
 
@@ -817,15 +819,15 @@ def test_acao_repetida_gera_aviso():
 
     sm.logger.addHandler(handler)
 
-    # O runner roda em ERROR; sem baixar o nível aqui, o
-    # warning é descartado antes de chegar ao handler.
+    # The runner runs at ERROR; without lowering the level here, the
+    # warning is dropped before reaching the handler.
     nivel_original = sm.logger.level
 
     sm.logger.setLevel(logging.WARNING)
 
     try:
 
-        # O painel nunca fecha: up_food continua na tela.
+        # The panel never closes: up_food stays on screen.
         for _ in range(REPEATED_ACTION_WARNING):
 
             machine.update([detection("up_food")])
@@ -857,22 +859,22 @@ def test_contagem_de_repeticao_zera_ao_progredir():
 
     clock.advance(ACTION_COOLDOWN + 0.01)
 
-    # Ação diferente: a contagem reinicia.
-    machine.update([detection("open_store")])
+    # Different action: the count restarts.
+    machine.update([detection("box")])
 
     assert machine._repeat_count == 1, machine._repeat_count
 
-    assert machine._last_action == "open_store_click", (
+    assert machine._last_action == "open_box", (
         machine._last_action
     )
 
 
 def test_max_preso_rola_a_tela_e_tenta_de_novo():
     """
-    O cenário: o ponto fixo ABRE um painel, ele mostra "max", a regra do
-    gray_max toca o mesmo ponto e reabre. A saída não é o BACK (neste
-    jogo ele SAI DO JOGO): é rolar até o canto de baixo ficar vazio e
-    tentar de novo.
+    The scenario: the fixed point OPENS a panel, it shows "max", the
+    gray_max rule taps the same point and reopens. The way out isn't BACK (in
+    this game it QUITS THE GAME): it's scrolling until the bottom corner is empty and
+    trying again.
     """
 
     machine, actions, clock = build()
@@ -892,14 +894,14 @@ def test_max_preso_rola_a_tela_e_tenta_de_novo():
 
     assert actions.actions == esperado, actions.actions
 
-    # E não para no primeiro escape: o ciclo se repete.
+    # And it doesn't stop at the first escape: the cycle repeats.
     assert actions.actions.count("scroll_bottom") == 2, (
         actions.actions
     )
 
 
 def test_nunca_usa_back():
-    """Se alguém reintroduzir BACK, este teste avisa antes de o bot fechar o jogo sozinho."""
+    """If someone reintroduces BACK, this test warns before the bot closes the game on its own."""
 
     from actions.manager import ACTION_TABLE
 
@@ -920,11 +922,11 @@ def test_nunca_usa_back():
 
 def test_up_food_em_normal_nao_escala_para_rolagem():
     """
-    A escada de fechamento vale só para DISMISS_ACTIONS, e "upgrade_food"
-    não é uma delas — up_food preso em NORMAL cai no _trap_guard (3
-    presses, 2 rodadas de "dismiss", press tenta de novo) em vez de
-    rolar. O "dismiss" conta na escada mas nunca acumula o bastante
-    para virar scroll_bottom, porque o press do meio zera a contagem.
+    The close-down ladder only applies to DISMISS_ACTIONS, and "upgrade_food"
+    isn't one of them — up_food stuck in NORMAL falls into _trap_guard (3
+    presses, 2 "dismiss" rounds, press tries again) instead of
+    scrolling. "dismiss" counts on the ladder but never accumulates enough
+    to become scroll_bottom, because the press in the middle zeroes the count.
     """
 
     machine, actions, clock = build()
@@ -941,17 +943,17 @@ def test_up_food_em_normal_nao_escala_para_rolagem():
         actions.actions
     )
 
-    # A escada nunca chega ao limiar da rolagem.
+    # The ladder never reaches the scroll threshold.
     assert machine._dismiss_attempts == 0
 
 
 def test_painel_travado_suprime_up_food_e_libera_outros_upgrades():
     """
-    O cenário da Wrap emperrada: up_food visível por N updates
-    seguidos sem resolver (preço inalcançável) = popup travado.
-    A supressão pula up_food para que regras de prioridade menor
-    (upgrades de outras estações) tenham a vez; quando a janela
-    esgota, up_food ganha outra chance (alterna).
+    The stuck-Wrap scenario: up_food visible for N straight updates
+    without resolving (unreachable price) = stuck popup.
+    Suppression skips up_food so lower-priority rules
+    (other stations' upgrades) get a turn; when the window
+    runs out, up_food gets another chance (alternates).
     """
 
     machine, actions, clock = build()
@@ -964,15 +966,15 @@ def test_painel_travado_suprime_up_food_e_libera_outros_upgrades():
 
         clock.advance(ACTION_COOLDOWN + 0.01)
 
-    # A regra de baixo ("upgrade") teve a vez no meio da janela.
+    # The lower rule ("upgrade") got its turn mid-window.
     assert "upgrade" in actions.actions, actions.actions
 
-    # Sair de NORMAL é progresso: a supressão zerou na troca.
+    # Leaving NORMAL is progress: suppression zeroed on the switch.
     assert machine._up_food_suppressed == 0
 
-    # Volta para NORMAL e confirma a alternância: sozinho na
-    # tela, up_food é pausado pela supressão e depois volta
-    # (alterna em vez de morrer para um lado só).
+    # Back to NORMAL, confirming the alternation: alone on
+    # screen, up_food is paused by suppression then returns
+    # (alternates instead of dying to one side).
     machine.update([detection("close")])
 
     clock.advance(ACTION_COOLDOWN + 0.01)
@@ -1002,12 +1004,76 @@ def test_painel_travado_suprime_up_food_e_libera_outros_upgrades():
     )
 
 
+def test_cinzento_travado_suprime_gray_e_libera_regras_de_baixo():
+    """
+    Mirror of the up_food test one level up: gray_coin (#4)
+    outranks up_food (#5), so a grayed-out price
+    (unreachable) starves the whole panel the same way. The
+    suppression skips the gray pair so up_food and the upgrades
+    below get a turn; then the pair gets another chance.
+    """
+
+    machine, actions, clock = build()
+
+    # gray and up_food visible together stall both (double
+    # suppression); the lower rule ("upgrade", e.g. stations with
+    # reachable prices) is the one served in the window.
+    tela = [
+        detection("gray_coin"),
+        detection("up_food"),
+        detection("upgrade"),
+    ]
+
+    for _ in range(GRAY_STUCK_UPDATES + 5):
+
+        machine.update(tela)
+
+        clock.advance(ACTION_COOLDOWN + 0.01)
+
+    # The lower rule ("upgrade") got its turn mid-window.
+    assert "upgrade" in actions.actions, actions.actions
+
+    # Alone on screen, gray is paused by suppression
+    # then returns (alternates instead of dying to one side).
+    machine2, actions2, clock2 = build()
+
+    for _ in range(GRAY_STUCK_UPDATES):
+
+        machine2.update([detection("gray_coin")])
+
+        clock2.advance(ACTION_COOLDOWN + 0.01)
+
+    assert machine2._gray_suppressed > 0
+
+    antes = actions2.actions.count("gray_coin")
+
+    for _ in range(GRAY_SUPPRESS_UPDATES + 1):
+
+        machine2.update([detection("gray_coin")])
+
+        clock2.advance(ACTION_COOLDOWN + 0.01)
+
+    assert machine2._gray_suppressed == 0
+
+    assert actions2.actions.count("gray_coin") > antes, (
+        actions2.actions
+    )
+
+    # Swaps state zeroing the pair, as with up_food.
+    machine2._gray_streak = 7
+    machine2._gray_suppressed = 5
+    machine2._enter(sm.UPGRADE)
+
+    assert machine2._gray_streak == 0
+    assert machine2._gray_suppressed == 0
+
+
 def test_nao_age_duas_vezes_sobre_a_mesma_tela():
     """
-    O bug relatado: fechava o "MAX" e tocava DE NOVO no mesmo ponto,
-    REABRINDO o painel. Causa: o cooldown (0.5s) libera antes de existir
-    frame que mostre o efeito, porque o detector tem ~0.535s de atraso —
-    a detecção em mão vem de ANTES do toque. Números medidos no device.
+    The reported bug: closed "MAX" then tapped AGAIN on the same spot,
+    REOPENING the panel. Cause: the cooldown (0.5s) releases before any
+    frame showing the effect exists, because the detector lags ~0.535s —
+    the detection in hand comes from BEFORE the tap. Numbers measured on-device.
     """
 
     COOLDOWN = 0.5
@@ -1017,13 +1083,13 @@ def test_nao_age_duas_vezes_sobre_a_mesma_tela():
 
     machine.action_cooldown = COOLDOWN
 
-    # Primeiro toque, sobre uma tela recém-vista.
+    # First tap, on a freshly seen screen.
     machine.update([detection("gray_max")], 0.0)
 
     assert actions.actions == ["gray_max"], actions.actions
 
-    # Passa o cooldown. A detecção continua sendo a MESMA tela
-    # de antes do toque — é o que o atraso do detector entrega.
+    # Past cooldown. The detection is still the SAME screen
+    # from before the tap — that's what detector lag delivers.
     clock.advance(COOLDOWN + 0.01)
 
     machine.update([detection("gray_max")], ATRASO)
@@ -1035,7 +1101,7 @@ def test_nao_age_duas_vezes_sobre_a_mesma_tela():
 
 
 def test_age_quando_o_frame_e_posterior_a_acao():
-    """O outro lado: frame de DEPOIS da ação com o painel ainda lá tem de agir, senão viraria paralisia."""
+    """The flip side: a post-action frame with the panel still there must act, or it'd become paralysis."""
 
     machine, actions, clock = build()
 
@@ -1045,7 +1111,7 @@ def test_age_quando_o_frame_e_posterior_a_acao():
 
     clock.advance(0.6)
 
-    # Atraso pequeno: o frame é de depois do toque.
+    # Small lag: the frame is from after the tap.
     machine.update([detection("gray_max")], 0.05)
 
     assert actions.actions == ["gray_max", "gray_max"], (
@@ -1054,7 +1120,7 @@ def test_age_quando_o_frame_e_posterior_a_acao():
 
 
 def test_frame_antigo_nao_bloqueia_para_sempre():
-    """O risco da correção seria travar o bot quando o detector está lento."""
+    """The risk of the fix would be stalling the bot when the detector is slow."""
 
     machine, actions, clock = build()
 
@@ -1062,7 +1128,7 @@ def test_frame_antigo_nao_bloqueia_para_sempre():
 
     machine.update([detection("gray_max")], 0.0)
 
-    # Vários frames velhos: nenhum age.
+    # Several old frames: none acts.
     for _ in range(5):
 
         clock.advance(0.6)
@@ -1071,21 +1137,21 @@ def test_frame_antigo_nao_bloqueia_para_sempre():
 
     assert actions.actions == ["gray_max"], actions.actions
 
-    # Frame fresco: age.
+    # Fresh frame: acts.
     machine.update([detection("gray_max")], 0.01)
 
     assert len(actions.actions) == 2, actions.actions
 
 
 def test_primeira_acao_nao_precisa_esperar():
-    """Sem esta guarda o bot não faria NADA no start, porque last_action_time = 0 é anterior a qualquer frame."""
+    """Without this guard the bot would do NOTHING at start, because last_action_time = 0 predates any frame."""
 
     machine, actions, _ = build()
 
     machine.last_action_time = 0.0
 
-    # Abaixo de MAX_DETECTION_AGE: acima dela cairia na guarda
-    # de detecção velha, que é outra coisa.
+    # Below MAX_DETECTION_AGE: above it would hit the
+    # stale-detection guard, which is another thing.
     machine.update([detection("gray_max")], 1.0)
 
     assert actions.actions == ["gray_max"], actions.actions
@@ -1093,10 +1159,10 @@ def test_primeira_acao_nao_precisa_esperar():
 
 def test_a_guarda_vale_para_todo_caminho_de_acao():
     """
-    A checagem vive em _can_act, ponto único por onde passam TODOS os
-    caminhos (regras, FOOD/NEW_POINT, swipe de exploração). Não dá para
-    montar o caso pela exploração: exploration_delay = 5s de tela vazia
-    já teria descartado o frame por MAX_DETECTION_AGE = 2s antes daqui.
+    The check lives in _can_act, the single point every path goes
+    through (rules, FOOD/NEW_POINT, exploration swipe). Can't build
+    the case via exploration: exploration_delay = 5s of empty screen
+    would already have dropped the frame via MAX_DETECTION_AGE = 2s before here.
     """
 
     machine, actions, clock = build()
@@ -1106,26 +1172,26 @@ def test_a_guarda_vale_para_todo_caminho_de_acao():
 
     machine.last_action_time = clock.now
 
-    # Frame capturado ANTES da ação: barrado.
+    # Frame captured BEFORE the action: blocked.
     machine._frame_time = clock.now - 0.1
 
     assert not machine._can_act()
 
-    # Frame do MESMO instante: barrado. Não pode mostrar o
-    # efeito de algo que acabou de acontecer.
+    # SAME-instant frame: blocked. Can't show the
+    # effect of something that just happened.
     machine._frame_time = clock.now
 
     assert not machine._can_act()
 
-    # Frame posterior à ação MAS dentro da animação: barrado. É o caso
-    # que a guarda causal sozinha deixava passar, causando o duplo toque.
+    # Post-action frame BUT inside the animation: blocked. The case
+    # the causal guard alone let through, causing the double tap.
     machine._frame_time = clock.now + 0.2
 
     assert not machine._can_act(), (
         "frame dentro da janela de animação não pode agir"
     )
 
-    # Passado o settle: liberado.
+    # Past settle: released.
     machine._frame_time = clock.now + 0.41
 
     assert machine._can_act()
@@ -1133,16 +1199,16 @@ def test_a_guarda_vale_para_todo_caminho_de_acao():
 
 def test_swipe_espera_a_vista_parar():
     """
-    O bug relatado: depois de rolar, o bot detectava um alvo num frame
-    capturado enquanto a vista ainda escorregava e tocava onde o alvo
-    ESTAVA. Um swipe move a VISTA INTEIRA e o jogo desliza por inércia
-    depois do dedo sair — daí a espera própria (SWIPE_WAITING_TIME),
-    contada do FIM do gesto.
+    The reported bug: after scrolling, the bot spotted a target in a frame
+    captured while the view was still sliding and tapped where the target
+    WAS. A swipe moves the WHOLE VIEW and the game glides on inertia
+    after the finger lifts — hence its own wait (SWIPE_WAITING_TIME),
+    counted from the END of the gesture.
     """
 
     machine, actions, clock = build()
 
-    # Tela vazia agora mesmo: dispara a exploração.
+    # Empty screen right now: fires exploration.
     machine.exploration_delay = 0.0
 
     machine.update([], lag=0.0)
@@ -1151,18 +1217,18 @@ def test_swipe_espera_a_vista_parar():
 
     momento_do_swipe = clock.now
 
-    # O swipe LEVA TEMPO para executar (SWIPE_DURATION_MS) — ponto do
-    # bug: medida da submissão, a espera seria consumida pelo próprio
-    # gesto e não sobraria nada.
+    # The swipe TAKES TIME to run (SWIPE_DURATION_MS) — the point of
+    # the bug: measured from submission, the wait would be eaten by the
+    # gesture itself with nothing left.
     clock.advance(0.5)
 
     actions.last_finished_at = clock.now
 
     fim_do_swipe = clock.now
 
-    # Alvo visível, mas a vista ainda escorrega. PASSADA a espera de um
-    # toque, e ainda barrado: é aí que a espera do swipe se distingue da
-    # de toque — testar antes de ACTION_SETTLE não provaria nada.
+    # Target visible, but the view still slides. PAST one tap's wait,
+    # and still blocked: that's where the swipe wait differs from the
+    # tap one — testing before ACTION_SETTLE would prove nothing.
     clock.advance(ACTION_SETTLE + 0.01)
 
     machine.update([detection("food")], lag=0.0)
@@ -1172,7 +1238,7 @@ def test_swipe_espera_a_vista_parar():
         "lugar errado"
     )
 
-    # Passado SWIPE_WAITING_TIME do FIM do swipe: liberado.
+    # Past SWIPE_WAITING_TIME from the swipe END: released.
     clock.advance(SWIPE_WAITING_TIME)
 
     assert clock.now > fim_do_swipe + SWIPE_WAITING_TIME
@@ -1183,8 +1249,8 @@ def test_swipe_espera_a_vista_parar():
         machine.action_counts
     )
 
-    # E a espera foi contada do fim do gesto, não da submissão:
-    # senão este teste passaria com o bug dentro.
+    # And the wait was counted from the gesture end, not submission:
+    # otherwise this test would pass with the bug inside.
     assert (
         clock.now - momento_do_swipe
         > SWIPE_WAITING_TIME + 0.5
@@ -1193,15 +1259,15 @@ def test_swipe_espera_a_vista_parar():
 
 def test_piso_do_frame_concorda_com_o_can_act():
     """
-    `frame_floor()` é o MESMO prazo que `_can_act` aplica, para o
-    VisionWorker poder pular frame que a máquina descartaria de todo
-    jeito. Se divergirem, o worker joga fora frame que serviria (bot
-    cego) ou analisa frame que não serve (passada perdida).
+    `frame_floor()` is the SAME deadline `_can_act` enforces, so the
+    VisionWorker can skip frames the machine would drop anyway.
+    If they diverge, the worker throws away frames that would serve (blind
+    bot) or analyzes frames that don't serve (wasted pass).
     """
 
-    # Máquina recém-nascida (build() adianta o relógio da última ação
-    # para vencer o cooldown, não serve aqui): sem ação, um piso
-    # qualquer cegaria o bot no arranque.
+    # Freshly born machine (build() fast-forwards the last-action clock
+    # to beat cooldown, no good here): with no action, any floor
+    # would blind the bot at startup.
     assert sm.StateMachine(FakeActions()).frame_floor() == 0.0
 
     machine, actions, clock = build()
@@ -1216,37 +1282,37 @@ def test_piso_do_frame_concorda_com_o_can_act():
 
     assert piso == clock.now + ACTION_SETTLE, piso
 
-    # Exatamente no piso: barrado pelos dois.
+    # Exactly at the floor: blocked by both.
     machine._frame_time = piso
 
     assert not machine._can_act()
 
-    # Um fio acima: liberado pelos dois.
+    # A hair above: released by both.
     machine._frame_time = piso + 0.001
 
     assert machine._can_act()
 
-    # E o piso do swipe é o maior dos dois.
+    # And the swipe floor is the larger of the two.
     machine._last_was_swipe = True
 
     assert machine.frame_floor() == clock.now + SWIPE_WAITING_TIME
 
 
 def test_swipe_espera_mais_que_um_toque():
-    """SWIPE_WAITING_TIME abaixo de ACTION_SETTLE não teria sentido: o swipe mexe MAIS na tela."""
+    """SWIPE_WAITING_TIME below ACTION_SETTLE would make no sense: the swipe moves MORE of the screen."""
 
     assert SWIPE_WAITING_TIME >= ACTION_SETTLE, (
         SWIPE_WAITING_TIME,
         ACTION_SETTLE,
     )
 
-    # E não tanto que a exploração fique lenta: o bot faz
-    # MAX_SWIPES seguidos procurando conteúdo.
+    # And not so long that exploration slows: the bot does
+    # MAX_SWIPES in a row looking for content.
     assert SWIPE_WAITING_TIME <= 2.0, SWIPE_WAITING_TIME
 
 
 def test_scroll_bottom_usa_a_espera_do_swipe():
-    """`scroll_bottom` é SEIS swipes seguidos; com espera curta, a escada voltaria a tocar em tela em movimento."""
+    """`scroll_bottom` is SIX swipes in a row; with a short wait, the ladder would tap on a moving screen again."""
 
     machine, actions, clock = build()
 
@@ -1260,7 +1326,7 @@ def test_scroll_bottom_usa_a_espera_do_swipe():
 
     actions.last_finished_at = clock.now
 
-    # Dentro da espera de swipe (mas fora da de toque): barrado.
+    # Inside the swipe wait (but outside the tap one): blocked.
     machine._frame_time = clock.now + ACTION_SETTLE + 0.01
 
     assert not machine._can_act(), (
@@ -1273,7 +1339,7 @@ def test_scroll_bottom_usa_a_espera_do_swipe():
 
 
 def test_toque_comum_nao_herda_a_espera_do_swipe():
-    """A bandeira tem de VOLTAR: um swipe não pode deixar toques seguintes pagando a espera longa."""
+    """The flag must FLIP BACK: one swipe can't leave later taps paying the long wait."""
 
     machine, actions, clock = build()
 
@@ -1287,7 +1353,7 @@ def test_toque_comum_nao_herda_a_espera_do_swipe():
 
     actions.last_finished_at = clock.now
 
-    # Basta a espera de toque.
+    # Just the tap wait.
     machine._frame_time = clock.now + ACTION_SETTLE + 0.01
 
     assert machine._can_act()
@@ -1295,17 +1361,17 @@ def test_toque_comum_nao_herda_a_espera_do_swipe():
 
 def test_nao_toca_com_o_painel_ja_fechado():
     """
-    O bug relatado, reproduzido no domínio do tempo. Simula a VERDADE do
-    jogo vs. a visão ATRASADA da máquina: toque com painel aberto fecha
-    (após animação); toque com painel fechado ABRE (o DISMISS_POINT abre
-    algo — por isso o duplo toque dói); a máquina só vê a tela de
-    `atraso` segundos atrás. O toque espúrio é o dado com painel JÁ
-    fechado — sem a guarda saem vários, com ela, nenhum.
+    The reported bug, replayed in the time domain. Simulates the game TRUTH
+    vs. the machine's LAGGED view: tap with panel open closes
+    (after animation); tap with panel closed OPENS (DISMISS_POINT opens
+    something — that's why the double tap hurts); the machine only sees the
+    screen from `lag` seconds ago. The spurious tap is the one made with the panel
+    ALREADY closed — without the guard several fire, with it, none.
     """
 
-    ATRASO = 0.535     # medido no device, 165 templates
+    ATRASO = 0.535     # measured on-device, 165 templates
     COOLDOWN = 0.5
-    ANIMACAO = 0.3     # tempo do jogo para fechar
+    ANIMACAO = 0.3     # game time to close
 
     def roda(settle):
 
@@ -1321,7 +1387,7 @@ def test_nao_toca_com_o_painel_ja_fechado():
         machine.action_settle = settle
         machine.last_action_time = clock.now - 100
 
-        # (instante em que passa a valer, aberto?)
+        # (instant it takes effect, open?)
         eventos = []
 
         def aberto(instante):
@@ -1363,34 +1429,43 @@ def test_nao_toca_com_o_painel_ja_fechado():
 
         return toques, espurios
 
-    # Sem settle (só cooldown + guarda causal): toca no vazio.
-    _, espurios_sem = roda(0.0)
+    # Isolates the causal/settle guard under test: gray suppression
+    # (25 updates) would also mute the taps and mask the bug
+    # this test must reproduce.
+    limiar = sm.GRAY_STUCK_UPDATES
+    sm.GRAY_STUCK_UPDATES = 10 ** 9
 
-    assert espurios_sem > 0, (
-        "a simulação deveria reproduzir o bug com settle=0"
-    )
+    try:
+        # No settle (cooldown + causal guard only): taps into the void.
+        _, espurios_sem = roda(0.0)
 
-    # Com settle cobrindo a animação: um toque, nenhum espúrio.
-    toques, espurios = roda(ACTION_SETTLE)
+        assert espurios_sem > 0, (
+            "a simulação deveria reproduzir o bug com settle=0"
+        )
 
-    assert espurios == 0, f"{espurios} toque(s) no painel fechado"
+        # With settle covering the animation: one tap, no spurious.
+        toques, espurios = roda(ACTION_SETTLE)
 
-    assert toques == 1, f"{toques} toques onde 1 bastava"
+        assert espurios == 0, f"{espurios} toque(s) no painel fechado"
+
+        assert toques == 1, f"{toques} toques onde 1 bastava"
+    finally:
+        sm.GRAY_STUCK_UPDATES = limiar
 
 
 def test_settle_cobre_a_animacao_configurada():
-    """O settle tem de ser maior que a animação do jogo. Baixar ACTION_SETTLE para 0.1 traria o duplo toque de volta."""
+    """Settle must exceed the game animation. Lowering ACTION_SETTLE to 0.1 would bring the double tap back."""
 
-    # Animação típica de painel de jogo.
+    # Typical game-panel animation.
     assert ACTION_SETTLE >= 0.3, ACTION_SETTLE
 
-    # E não tão alto que o bot fique lento: acima de ~1s cada
-    # decisão custaria settle + atraso do detector.
+    # And not so high the bot slows: above ~1s every
+    # decision would cost settle + detector lag.
     assert ACTION_SETTLE <= 1.0, ACTION_SETTLE
 
 
 def test_escada_zera_quando_algo_e_resolvido():
-    """Se uma ação normal aconteceu, a contagem recomeça: não rola a tela por tentativas antigas."""
+    """If a normal action happened, the count restarts: no screen scroll over old attempts."""
 
     machine, actions, clock = build()
 
@@ -1404,14 +1479,14 @@ def test_escada_zera_quando_algo_e_resolvido():
         DISMISS_ATTEMPTS_BEFORE_SCROLL
     )
 
-    # Progresso: uma ação de jogo.
-    machine.update([detection("open_store")])
+    # Progress: a game action.
+    machine.update([detection("box")])
 
     clock.advance(ACTION_COOLDOWN + 0.01)
 
     assert machine._dismiss_attempts == 0
 
-    # Próximo gray_max começa do ponto, não da rolagem.
+    # Next gray_max starts from scratch, not from scroll.
     machine.update([detection("gray_max")])
 
     assert actions.actions[-1] == "gray_max", actions.actions
@@ -1432,21 +1507,21 @@ def test_escada_zera_ao_trocar_de_estado():
 
 
 def test_apenas_acoes_de_fechar_escalam():
-    """Ação de jogo não pode virar rolagem de tela por repetir."""
+    """A game action can't become a screen scroll by repeating."""
 
     machine, actions, clock = build()
 
     for _ in range(DISMISS_ATTEMPTS_BEFORE_SCROLL + 3):
 
-        machine.update([detection("open_store")])
+        machine.update([detection("box")])
 
         clock.advance(ACTION_COOLDOWN + 0.01)
 
-    assert set(actions.actions) == {"open_store_click"}, actions.actions
+    assert set(actions.actions) == {"open_box"}, actions.actions
 
     assert "gray_max" in DISMISS_ACTIONS
     assert "dismiss" in DISMISS_ACTIONS
-    assert "open_store_click" not in DISMISS_ACTIONS
+    assert "open_box" not in DISMISS_ACTIONS
 
 
 def main():

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Mescla dataset_to_unify/ em dataset/, renomeando imagens em conflito
-e ajustando o campo `image` de cada amostra. Limpa dataset_to_unify
-ao final.
+Merges dataset_to_unify/ into dataset/, renaming conflicting images
+and adjusting each sample's `image` field. Cleans dataset_to_unify
+at the end.
 
     python tools/unify_dataset.py
 """

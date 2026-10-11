@@ -1,7 +1,7 @@
-"""Índice do dataset no PostgreSQL: só metadado, as imagens ficam em arquivo.
+"""Dataset index in PostgreSQL: metadata only, images stay on file.
 
-O samples.jsonl é a fonte de verdade; o banco é conveniência de consulta
-(DDL em docs/dataset.md), por isso nenhuma falha dele derruba a gravação.
+samples.jsonl is the source of truth; the database is a query convenience
+(DDL in docs/dataset.md), so no failure in it breaks recording.
 """
 
 import json
@@ -12,7 +12,7 @@ logger = log.get("dataset.db")
 
 
 class PostgresStore:
-    """Inserção em lote: uma ida ao banco por amostra somaria latência à thread que também codifica PNG."""
+    """Batched inserts: one DB round-trip per sample would add latency to the thread that also encodes PNG."""
 
     def __init__(self, dsn, batch_size=20, schema="public"):
 
@@ -24,13 +24,13 @@ class PostgresStore:
 
         self.buffer = []
 
-        # Sessão registrada só uma vez, na primeira amostra.
+        # Session registered only once, on the first sample.
         self.session_registered = set()
 
     def connect(self):
-        """Erro de DSN aparece aqui, no chamador, não no meio da sessão."""
+        """DSN errors surface here, at the caller, not mid-session."""
 
-        # Import tardio: quem não usa banco não precisa do psycopg instalado.
+        # Late import: users without a database don't need psycopg installed.
         try:
 
             import psycopg
@@ -209,7 +209,7 @@ class PostgresStore:
 
         except Exception:
 
-            # Sem rollback a conexão fica inutilizável para o próximo lote.
+            # Without rollback the connection stays unusable for the next batch.
             try:
                 self.connection.rollback()
 
@@ -220,7 +220,7 @@ class PostgresStore:
 
 
 def importar_jsonl(caminho, dsn, batch_size=200, schema="public"):
-    """Carrega no banco um samples.jsonl já gravado (inclusive de sessões antigas, sem banco na hora)."""
+    """Loads an already recorded samples.jsonl into the database (including old sessions recorded without a database)."""
 
     store = PostgresStore(
         dsn,

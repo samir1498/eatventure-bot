@@ -1,7 +1,7 @@
 """
-Testes da compactação de numeração dos templates. Roda em pastas temporárias.
-Renomear é irreversível: se o destino de um arquivo for o nome de outro ainda
-não processado, um sobrescreve o outro e o template some.
+Tests for template-numbering compaction. Runs in temp dirs.
+Renaming is irreversible: if one file's destination is another's not-yet-
+processed name, one overwrites the other and the template is gone.
 """
 
 import sys
@@ -21,7 +21,7 @@ from renumerar import (                          # noqa: E402
 
 
 def monta(numeros, extras=()):
-    """Conteúdo do arquivo = o próprio número, para rastrear quem virou quem."""
+    """File content = its own number, to track what became what."""
 
     pasta = Path(tempfile.mkdtemp())
 
@@ -52,7 +52,7 @@ def conteudos(pasta):
 
 
 def test_fecha_lacuna_no_meio():
-    """Falta o 3 entre 2 e 4: 4 vira 3 e 5 vira 4."""
+    """Missing 3 between 2 and 4: 4 becomes 3 and 5 becomes 4."""
 
     pasta = monta([1, 2, 4, 5])
 
@@ -60,7 +60,7 @@ def test_fecha_lacuna_no_meio():
 
     assert sequencia(pasta) == [1, 2, 3, 4], sequencia(pasta)
 
-    # O conteúdo acompanha: o que era 4 agora é 3.
+    # Content follows: what was 4 is now 3.
     assert conteudos(pasta) == {
         1: "1",
         2: "2",
@@ -82,7 +82,7 @@ def test_varias_lacunas():
 
 
 def test_nao_perde_arquivo():
-    """Se a ordem de renomeio estivesse errada, um sobrescreveria o outro."""
+    """If the rename order were wrong, one would overwrite the other."""
 
     pasta = monta([2, 5, 9, 12, 13, 20])
 
@@ -116,7 +116,7 @@ def test_sem_aplicar_nao_renomeia():
 
     assert len(mudancas) == 2, mudancas
 
-    # Nada mudou no disco: o padrão do CLI é só mostrar.
+    # Nothing changed on disk: the CLI default only shows.
     assert sequencia(pasta) == [1, 5, 9], sequencia(pasta)
 
 
@@ -131,16 +131,16 @@ def test_ignora_nome_fora_do_padrao():
 
     assert sequencia(pasta) == [1, 2]
 
-    # Os intrusos continuam lá, intactos.
+    # The intruders stay there, intact.
     assert (pasta / "referencia.png").exists()
     assert (pasta / "item_abc.png").exists()
 
 
 def test_ordem_crescente_nunca_gera_colisao():
     """
-    A ordem crescente torna colisão impossível: o alvo de cada arquivo é
-    <= seu número, e quem ainda não foi processado tem número MAIOR que a
-    origem. Verificado por força bruta, em vez de por argumento.
+    Ascending order makes collision impossible: each file's target is
+    <= its number, and anyone not yet processed has a BIGGER number than
+    the source. Verified by brute force, not by argument.
     """
 
     import itertools
@@ -153,8 +153,8 @@ def test_ordem_crescente_nunca_gera_colisao():
 
             for origem, destino in planejar(pasta):
 
-                # No momento de renomear, o destino nunca pode
-                # ser um arquivo que ainda não foi processado.
+                # At rename time, the destination can never
+                # be a file not yet processed.
                 assert not destino.exists() or destino == origem, (
                     numeros,
                     origem.name,
@@ -170,10 +170,10 @@ def test_ordem_crescente_nunca_gera_colisao():
 
 def test_guarda_de_sobrescrita(monkeypatch=None):
     """
-    Guarda defensiva: destino ocupado pula e avisa em vez de destruir o
-    arquivo. Colisão não acontece pelo caminho normal, então o plano é
-    injetado à mão — ramo defensivo que nunca roda pode estar quebrado
-    sem ninguém saber.
+    Defensive guard: an occupied destination is skipped with a warning instead of destroying the
+    file. Collision never happens on the normal path, so the plan is
+    injected by hand — a defensive branch that never runs may be broken
+    without anyone knowing.
     """
 
     import renumerar as mod
@@ -182,7 +182,7 @@ def test_guarda_de_sobrescrita(monkeypatch=None):
 
     original = mod.planejar
 
-    # Plano inválido de propósito: manda o 2 virar o 1.
+    # Deliberately invalid plan: sends 2 to become 1.
     mod.planejar = lambda d: [
         (d / "item_002.png", d / "item_001.png")
     ]
@@ -205,7 +205,7 @@ def test_guarda_de_sobrescrita(monkeypatch=None):
 
     assert avisos, "deveria ter avisado"
 
-    # Os dois arquivos sobrevivem, com o conteúdo original.
+    # Both files survive, with original content.
     assert conteudos(pasta) == {1: "1", 2: "2"}, conteudos(pasta)
 
 
@@ -215,7 +215,7 @@ def test_proximo_numero_depois_de_compactar():
 
     renumerar(pasta, aplicar=True, log=lambda *a: None)
 
-    # 4 arquivos compactos -> o novo é o 5.
+    # 4 compact files -> the new one is 5.
     assert proximo_numero(pasta) == 5, proximo_numero(pasta)
 
 

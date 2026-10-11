@@ -1,4 +1,4 @@
-"""Escolha do device Android: USB+wifi do mesmo aparelho aparecem como duas entradas no `adb devices`, então resolve qual serial usar (--device > DEVICE_SERIAL > único conectado > pergunta)."""
+"""Android device choice: USB+wifi from the same handset show as two entries in `adb devices`, so resolve which serial to use (--device > DEVICE_SERIAL > single connected > prompt)."""
 
 import subprocess
 import sys
@@ -10,7 +10,7 @@ ADB = config.ADB_PATH
 
 
 def listar():
-    """Seriais em estado 'device' — 'unauthorized'/'offline' ficam de fora por não aceitarem comando."""
+    """Serials in 'device' state — 'unauthorized'/'offline' are left out for not accepting commands."""
 
     resultado = subprocess.run(
         [ADB, "devices"],
@@ -38,7 +38,7 @@ def listar():
 
 
 def _propriedade(serial, nome):
-    """getprop, ou None se falhar — puramente informativo, falha não interrompe nada."""
+    """getprop, or None on failure — purely informational, failure interrupts nothing."""
 
     try:
 
@@ -60,7 +60,7 @@ def _propriedade(serial, nome):
 
 
 def descrever(seriais):
-    """[(serial, modelo, wifi, hardware)]; `hardware` é o ro.serialno, que revela entradas duplicadas do mesmo aparelho."""
+    """[(serial, model, wifi, hardware)]; `hardware` is ro.serialno, which reveals duplicate entries of the same handset."""
 
     fichas = []
 
@@ -79,9 +79,9 @@ def descrever(seriais):
 
 
 def rotular(fichas):
-    """Uma linha por device; marca o duplicado porque a wifi cai sozinha e derruba a captura no meio da sessão."""
+    """One line per device; marks the duplicate because wifi drops on its own and kills capture mid-session."""
 
-    # hardware -> primeira posição (1-based) em que apareceu
+    # hardware -> first position (1-based) where it appeared
     primeira = {}
 
     for indice, (_, _, _, hardware) in enumerate(fichas, start=1):
@@ -115,7 +115,7 @@ def rotular(fichas):
 
 
 def padrao(fichas):
-    """Índice (1-based) sugerido: primeiro device por USB — a wifi cai sozinha e derruba a captura."""
+    """Index (1-based) suggested: first device over USB — wifi drops on its own and kills capture."""
 
     for indice, (_, _, wifi, _) in enumerate(fichas, start=1):
 
@@ -124,15 +124,15 @@ def padrao(fichas):
 
 def escolher(seriais, pedido=None, perguntar=None, fichas=None):
     """
-    Devolve o serial a usar.
+    Returns the serial to use.
 
-    `pedido`    serial fixado (--device ou config)
-    `perguntar` função que recebe o texto e devolve a resposta;
-                None = não pergunta (levanta erro em vez disso)
-    `fichas`    resultado de descrever(); None = descreve aqui
+    `pedido`    pinned serial (--device or config)
+    `perguntar` function receiving the text and returning the answer;
+                None = no prompt (raises an error instead)
+    `fichas`    descrever() result; None = describe here
 
-    Tudo que fala com o mundo entra por parâmetro, para a decisão
-    ser testável sem device plugado.
+    Everything touching the outside world comes in via parameters, so the decision
+    is testable with no device plugged in.
     """
 
     if not seriais:
@@ -190,8 +190,8 @@ def escolher(seriais, pedido=None, perguntar=None, fichas=None):
 
     while True:
 
-        # EOF = entrada redirecionada; isatty() sozinho não pega isso no
-        # Windows (`python main.py < NUL` passa o teste e só falha aqui).
+        # EOF = redirected input; isatty() alone does not catch this on
+        # Windows (`python main.py < NUL` passes the check and only fails here).
         try:
 
             resposta = (perguntar(texto) or "").strip()
@@ -221,11 +221,11 @@ def escolher(seriais, pedido=None, perguntar=None, fichas=None):
 
 
 def resolver(pedido=None):
-    """Caminho normal: lista, escolhe (perguntando no terminal se precisar) e loga o escolhido."""
+    """Normal path: list, choose (prompting in the terminal if needed) and log the chosen one."""
 
     seriais = listar()
 
-    # Sem terminal, travar num input invisível é pior que um erro claro.
+    # Without a terminal, hanging on an invisible input is worse than a clear error.
     perguntar = input if sys.stdin and sys.stdin.isatty() else None
 
     serial = escolher(seriais, pedido=pedido, perguntar=perguntar)

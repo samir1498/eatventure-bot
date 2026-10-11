@@ -1,4 +1,4 @@
-"""Máquina de estados: tabela de regras por estado, única função _act, timeout por estado."""
+"""State machine: rule table per state, single _act function, per-state timeout."""
 
 import logging
 import time
@@ -9,6 +9,8 @@ from core.metrics import formata_duracao
 from core.config import (
     ACTION_COOLDOWN,
     ACTION_SETTLE,
+    BOX_STUCK_UPDATES,
+    BOX_SUPPRESS_UPDATES,
     CYCLE_CATEGORIES,
     DISMISS_ACTIONS,
     DISMISS_ATTEMPTS_BEFORE_SCROLL,
@@ -16,6 +18,8 @@ from core.config import (
     EXPLORATION_DELAY_AFTER_ACTION,
     FOOD_IGNORE_IOU,
     FOOD_MAX_ATTEMPTS,
+    GRAY_STUCK_UPDATES,
+    GRAY_SUPPRESS_UPDATES,
     MAX_DETECTION_AGE,
     MAX_SWIPES,
     REPEATED_ACTION_WARNING,
@@ -44,27 +48,33 @@ DELIVERY = "DELIVERY"
 HELPER = "HELPER"
 
 
-# Regras: (categoria, ação, próximo estado). Ordem = prioridade
-# (a primeira categoria encontrada é a única executada no
-# frame); next_state None mantém o estado atual.
+# Gray dismiss pair: an unreachable price shows dimmed and
+# never resolves on tap — same suppression treatment as up_food.
+GRAY_DISMISS_CATEGORIES = ("gray_coin", "gray_max")
 
-# As quatro primeiras fecham o que não deveria estar aberto,
-# antes de qualquer ação de jogo.
+
+# Rules: (category, action, next state). Order = priority
+# (the first category found is the only one executed in the
+# frame); next_state None keeps the current state.
+
+# The first four close whatever should not be open,
+# before any game action.
 #
-# up_food em NORMAL faz o MESMO que em FOOD (long press de
-# UPGRADE_FOOD_PRESS s). Se o painel abrir sem querer e o press
-# nunca resolver, _trap_guard desvia para "dismiss" (HOLD em
-# ponto fixo, coberto por
+# up_food in NORMAL does the SAME as in FOOD (long press of
+# UPGRADE_FOOD_PRESS s). If the panel opens by accident and the press
+# never resolves, _trap_guard diverts to "dismiss" (HOLD on a
+# fixed point, covered by
 # tests/test_pipeline.py::test_dismiss_toca_no_ponto_neutro)
-# por UPGRADE_FOOD_DISMISS_ROUNDS rodadas antes de tentar o
-# press de novo. "upgrade_food" segue fora de DISMISS_ACTIONS
-# de propósito: a escada de fechamento não vale para ele.
+# for UPGRADE_FOOD_DISMISS_ROUNDS rounds before trying the
+# press again. "upgrade_food" stays out of DISMISS_ACTIONS
+# on purpose: the closing ladder does not apply to it.
 NORMAL_RULES = [
     ("open_store", "open_store_click", None),
     ("close", "close", None),
     ("gray_max", "gray_max", None),
     ("gray_coin", "gray_coin", None),
     ("up_food", "upgrade_food", None),
+    ("box", "open_box", None),
 
     ("plane", "plane", RENOVATE),
     ("build", "click", RENOVATE),
@@ -72,7 +82,6 @@ NORMAL_RULES = [
     ("helper", "helper", HELPER),
     ("upgrade", "upgrade", UPGRADE),
     ("new_point", "new_point", NEW_POINT),
-    # ("box", "open_box", None) disabled: user opens boxes manually.
     ("food", "food", FOOD),
 ]
 
@@ -83,17 +92,19 @@ RENOVATE_RULES = [
 
 DELIVERY_RULES = [
     ("accept_delivery", "accept_delivery", NORMAL),
+    ("helper", "helper", HELPER),
     ("close", "close", NORMAL),
 ]
 
 HELPER_RULES = [
     ("invite_helper", "invite_helper", NORMAL),
+    ("delivery", "delivery", DELIVERY),
     ("close", "close", NORMAL),
 ]
 
-# up_upgrade permanece em UPGRADE de propósito: no próximo
-# frame procuramos outro item para evoluir. Só saímos da
-# tela quando não houver mais nenhum.
+# up_upgrade stays in UPGRADE on purpose: on the next
+# frame we look for another item to upgrade. We only leave the
+# screen when there is nothing left.
 UPGRADE_RULES = [
     ("up_upgrade", "upgrade_item", None),
     ("close", "close", NORMAL),
@@ -106,9 +117,9 @@ STATE_RULES = {
     HELPER: HELPER_RULES,
     UPGRADE: UPGRADE_RULES,
 
-    # FOOD e NEW_POINT têm espera própria depois do press,
-    # então são tratados em handler dedicado. As categorias
-    # ficam aqui só para o filtro do detector.
+    # FOOD and NEW_POINT have their own wait after the press,
+    # so they are handled in a dedicated handler. The categories
+    # stay here only for the detector filter.
     FOOD: [
         ("up_food", "upgrade_food", None),
         ("gray_max", "gray_max", None),
@@ -122,8 +133,8 @@ STATE_RULES = {
 
 class StateMachine:
 
-    # Mantidos como atributos de classe por compatibilidade
-    # com quem referenciava StateMachine.NORMAL.
+    # Kept as class attributes for compatibility
+    # with code referencing StateMachine.NORMAL.
     NORMAL = NORMAL
     RENOVATE = RENOVATE
     FOOD = FOOD
@@ -136,7 +147,7 @@ class StateMachine:
 
         self.action_manager = action_manager
 
-        # Gravador do dataset de treino. None = não grava.
+        # Training dataset recorder. None = do not record.
         self.recorder = recorder
         self.detector = detector
 
@@ -147,133 +158,157 @@ class StateMachine:
         self.action_cooldown = ACTION_COOLDOWN
         self.action_settle = ACTION_SETTLE
 
-        # Espera própria do swipe, maior que a de um toque: um
-        # toque mexe um painel, um swipe move a VISTA INTEIRA e
-        # o jogo segue deslizando por inércia.
+        # Swipe's own wait, longer than a tap's: a
+        # tap moves a panel, a swipe moves the WHOLE VIEW and
+        # the game keeps sliding by inertia.
         self.swipe_settle = SWIPE_WAITING_TIME
 
-        # A última ação foi um swipe?
+        # Was the last action a swipe?
         #
-        # Guardado como BANDEIRA, e não como uma cópia do valor
-        # do settle, de propósito: assim `machine.action_settle
-        # = 0` continua desligando a espera de toque (é o que os
-        # testes fazem) sem que exista um segundo número
-        # desatualizado em algum lugar.
+        # Stored as a FLAG, not as a copy of the
+        # settle value, on purpose: so `machine.action_settle
+        # = 0` keeps disabling the tap wait (which is what the
+        # tests do) without a second stale
+        # number living somewhere else.
         self._last_was_swipe = False
 
-        # Frame atual, guardado para o gravador do dataset.
+        # Current frame, stored for the dataset recorder.
         self._frame = None
         self._detections = []
         self._lag = 0.0
 
-        # Quando o frame que gerou as detecções em mão foi
-        # CAPTURADO (não quando chegou aqui).
+        # When the frame that produced the detections in hand was
+        # CAPTURED (not when it arrived here).
         #
-        # Sem isso o bot age duas vezes sobre a mesma tela: o
-        # cooldown libera antes de existir um frame que mostre
-        # o efeito da primeira ação. Ver _can_act.
+        # Without this the bot acts twice on the same screen: the
+        # cooldown releases before any frame shows
+        # the first action's effect. See _can_act.
         self._frame_time = None
 
-        # Quantas vezes esperou frame novo, para não encher o
-        # log com uma linha por quadro.
+        # How many times it waited for a new frame, to avoid filling the
+        # log with one line per frame.
         self._waited_warned = 0.0
 
-        # Espera depois do long press de comida.
+        # Wait after the food long press.
         self.up_food_wait_start = None
 
-        # Item de "food" atual, esperando up_food. Guardado aqui (e
-        # não só na detecção local) porque _wait_or_give_up precisa
-        # dele para saber QUAL item ignorar ao desistir.
+        # Current "food" item, waiting for up_food. Stored here (and
+        # not only in the local detection) because _wait_or_give_up needs
+        # it to know WHICH item to ignore when giving up.
         self._food_target = None
 
-        # Itens de "food" que esgotaram UP_FOOD_WAIT em
-        # FOOD_MAX_ATTEMPTS tentativas seguidas — ignorados até o
-        # próximo swipe real, senão o bot tenta o mesmo item para
-        # sempre (achar sempre adia o swipe).
+        # "food" items that exhausted UP_FOOD_WAIT in
+        # FOOD_MAX_ATTEMPTS consecutive tries — ignored until the
+        # next real swipe, otherwise the bot tries the same item
+        # forever (finding it keeps postponing the swipe).
         self._ignored_food = []
 
-        # Última desistência (item + quantas vezes seguidas), para
-        # saber se a PRÓXIMA é no mesmo item ou um recomeço.
+        # Last give-up (item + how many times in a row), to know
+        # whether the NEXT one is on the same item or a restart.
         self._food_fail_target = None
         self._food_fail_count = 0
 
-        # Conta do start, não do primeiro build: o primeiro
-        # trecho também é informação.
+        # Counted from start, not from the first build: the first
+        # stretch is information too.
         self.cycle_at = time.monotonic()
         self.cycle_last = None
         self.cycle_count = 0
 
-        # Contado em _act (único ponto por onde ação sai);
-        # contar em _apply_rules incluiria tentativa barrada por
-        # cooldown/worker ocupado. Por categoria e por ação
-        # porque são perguntas diferentes: `fly` é categoria
-        # (voos), `upgrade_item` é ação (cliques de upgrade).
+        # Counted in _act (the single point actions leave through);
+        # counting in _apply_rules would include attempts blocked by
+        # cooldown/busy worker. Per category and per action
+        # because they are different questions: `fly` is a category
+        # (flights), `upgrade_item` is an action (upgrade clicks).
         self.category_counts = Counter()
         self.action_counts = Counter()
 
         self.last_action = None
         self.last_action_at = None
 
-        # Ritmo normal: um swipe a cada tanto, enquanto não
-        # aparecer nada.
+        # Normal pace: a swipe every so often, while
+        # nothing shows up.
         self.exploration_delay = EXPLORATION_DELAY
 
-        # Depois de ACHAR algo, a exploração é ADIADA por este
-        # tanto — não cancelada.
+        # After FINDING something, exploration is POSTPONED by this
+        # much — not cancelled.
         self.exploration_action_delay = (
             EXPLORATION_DELAY_AFTER_ACTION
         )
 
-        # De quando se conta a espera do próximo swipe: o
-        # último swipe, ou a última vez que algo foi achado.
+        # What the next-swipe wait counts from: the
+        # last swipe, or the last time something was found.
         self.explore_anchor = time.monotonic()
 
-        # O âncora veio de um "achou"?
+        # Did the anchor come from a "find"?
         #
-        # Guardado como BANDEIRA, e o intervalo derivado dela na
-        # hora — não uma cópia do número. É o que mantém
-        # `machine.exploration_delay = 0` funcionando (os testes
-        # usam isso) sem existir um segundo valor guardado que
-        # possa ficar desatualizado. Mesmo padrão do
+        # Stored as a FLAG, with the interval derived from it at
+        # call time — not a copy of the number. That is what keeps
+        # `machine.exploration_delay = 0` working (the tests
+        # use that) with no second stored value that
+        # could go stale. Same pattern as
         # _last_was_swipe.
         self.explore_found = False
 
-        # Ciclo de varredura: 5 swipes para um lado, 5 para o
-        # outro, indefinidamente. A contagem NÃO zera quando o
-        # bot acha algo — zerava antes, e o efeito era varrer
-        # sempre o mesmo pedaço da tela (quase todo swipe revela
-        # algum alvo, então a volta nunca fechava e a metade
-        # distante do restaurante nunca era visitada).
+        # Sweep cycle: 5 swipes one way, 5 the other,
+        # indefinitely. The count does NOT reset when the
+        # bot finds something — it used to reset, and the effect was always sweeping
+        # the same slice of the screen (almost every swipe reveals
+        # some target, so the return trip never closed and the far
+        # half of the restaurant was never visited).
         self.swipe_direction = SWIPE_START_DIRECTION
         self.swipe_count = 0
         self.max_swipes = MAX_SWIPES
 
-        # Evita repetir o aviso de detecção velha a cada frame.
+        # Avoid repeating the stale-detection warning on every frame.
         self._stale_warned = 0.0
 
-        # Detecta ação que repete sem resolver nada.
+        # Detects an action repeating without resolving anything.
         self._last_action = None
         self._repeat_count = 0
 
-        # Presses consecutivos de upgrade_food em NORMAL (lê
-        # _trap_guard: painel que nunca resolve cai para dismiss).
+        # Consecutive upgrade_food presses in NORMAL (see
+        # _trap_guard: a panel that never resolves falls back to dismiss).
         self._up_food_repeats = 0
 
-        # Updates consecutivos com up_food visível sem o painel
-        # resolver (lê update: popup travado, ex. preço
-        # inalcançável) + supressão ativa de up_food.
+        # Consecutive updates with up_food visible without the panel
+        # resolving (see update: stuck popup, e.g. unreachable
+        # price) + active up_food suppression.
         self._up_food_streak = 0
         self._up_food_suppressed = 0
 
-        # Tentativas consecutivas de fechar algo. Sobe a escada
-        # de escalonamento em vez de repetir o que não funcionou.
+        # Same one level up: dimmed gray_coin/gray_max
+        # (unreachable price) outrank up_food and
+        # lock the panel the same way — suppression of the pair.
+        self._gray_streak = 0
+        self._gray_suppressed = 0
+
+        # Same one step down: a chest that never resolves is a
+        # paid offer, not loot — suppression of open_box.
+        self._box_streak = 0
+        self._box_suppressed = 0
+
+        # Foreground gate: while the game is not focused (settings,
+        # Gmail, Play sheet) no action may fire. Set from main.py's
+        # game-ensure check; defaults to True so tests and the first
+        # frames behave as before.
+        self._game_in_foreground = True
+        self._foreground_warned = 0.0
+
+        # Consecutive attempts at closing something. Climbs the
+        # escalation ladder instead of repeating what did not work.
         self._dismiss_attempts = 0
 
-        # Quantas vezes já precisou rolar para escapar.
+        # How many times it already had to scroll to escape.
         self._dismiss_rounds = 0
 
+    def set_game_foreground(self, in_foreground):
+        """Called from main.py's game-ensure check. None = unknown, keep previous."""
+        if in_foreground is None:
+            return
+        self._game_in_foreground = bool(in_foreground)
+
     def wanted_categories(self):
-        """Categorias do estado atual, em ordem de prioridade — filtro do detector (~264ms → ~16ms por passada em UPGRADE)."""
+        """Current-state categories, in priority order — detector filter (~264ms → ~16ms per pass in UPGRADE)."""
 
         rules = STATE_RULES.get(self.state, NORMAL_RULES)
 
@@ -285,10 +320,10 @@ class StateMachine:
 
                 categories.append(category)
 
-        # Fora de NORMAL, ainda queremos ver o "X" (saída de
-        # emergência de qualquer modal). No FIM da lista: é rede
-        # de segurança, não prioridade — onde importa de verdade
-        # ele já está nas regras, na posição certa.
+        # Outside NORMAL, we still want to see the "X" (emergency
+        # exit from any modal). At the END of the list: it is a
+        # safety net, not a priority — where it truly matters
+        # it is already in the rules, in the right position.
         if "close" not in categories:
 
             categories.append("close")
@@ -303,8 +338,8 @@ class StateMachine:
         frame_time=None,
     ):
 
-        # Antes de qualquer return: é aqui que a ação anterior
-        # recebe veredito, mesmo nos frames em que o bot não age.
+        # Before any return: this is where the previous action
+        # gets its verdict, even on frames where the bot does not act.
         if self.recorder is not None:
 
             self._frame = frame
@@ -318,8 +353,8 @@ class StateMachine:
                 self.state,
             )
 
-        # lag é a idade do frame; guardado antes de qualquer
-        # coisa porque todo caminho de ação passa por _can_act.
+        # lag is the frame age; stored before anything
+        # else because every action path goes through _can_act.
         self._frame_time = time.monotonic() - lag
 
         self._lag = lag
@@ -327,8 +362,8 @@ class StateMachine:
         if self._timed_out():
             return
 
-        # Detecção velha: clicar com base num frame antigo
-        # acerta onde o objeto ESTAVA.
+        # Stale detection: clicking from an old frame
+        # hits where the object WAS.
         if (
             MAX_DETECTION_AGE is not None
             and lag > MAX_DETECTION_AGE
@@ -360,8 +395,8 @@ class StateMachine:
 
         else:
 
-            # Painel sumiu sozinho: a contagem recomeça do zero
-            # na próxima vez que o up_food aparecer.
+            # Panel went away on its own: the count restarts from zero
+            # the next time up_food shows up.
             if self.state == NORMAL:
                 if any(
                     d.get("category") == "up_food"
@@ -391,19 +426,84 @@ class StateMachine:
                 if self._up_food_suppressed > 0:
                     self._up_food_suppressed -= 1
                     if self._up_food_suppressed == 0:
-                        # Supressão esgotada: up_food ganha uma
-                        # janela nova (streak zerado) antes de
-                        # poder ser suprimido de novo — alterna
-                        # entre o painel e os outros upgrades.
+                        # Suppression exhausted: up_food gets a
+                        # fresh window (zeroed streak) before it
+                        # can be suppressed again — alternates
+                        # between the panel and the other upgrades.
                         self._up_food_streak = 0
+                # Same cycle for the gray pair: visible for N
+                # updates without resolving = stuck popup; suppress
+                # so up_food and the upgrades below get
+                # their turn, then the pair gets another chance.
+                if any(
+                    d.get("category") in GRAY_DISMISS_CATEGORIES
+                    for d in detections or []
+                ):
+                    self._gray_streak += 1
+                    if (
+                        self._gray_streak >= GRAY_STUCK_UPDATES
+                        and self._gray_suppressed <= 0
+                    ):
+                        self._gray_suppressed = (
+                            GRAY_SUPPRESS_UPDATES
+                        )
+                        self._gray_streak = 0
+                        logger.warning(
+                            "gray dismiss (gray_coin/gray_max) "
+                            "stuck open for %d updates in "
+                            "NORMAL (unresolvable panel?) — "
+                            "suppressing gray dismiss for %d "
+                            "updates so lower rules get a turn",
+                            GRAY_STUCK_UPDATES,
+                            GRAY_SUPPRESS_UPDATES,
+                        )
+                else:
+                    self._gray_streak = 0
+                    self._gray_suppressed = 0
+                if self._gray_suppressed > 0:
+                    self._gray_suppressed -= 1
+                    if self._gray_suppressed == 0:
+                        self._gray_streak = 0
+                # Same cycle for the reward chest: visible for N
+                # updates without resolving = paid offer (e.g.
+                # starter pack), not free loot; suppress open_box
+                # so the bot backs off instead of tapping the paywall.
+                if any(
+                    d.get("category") == "box"
+                    for d in detections or []
+                ):
+                    self._box_streak += 1
+                    if (
+                        self._box_streak >= BOX_STUCK_UPDATES
+                        and self._box_suppressed <= 0
+                    ):
+                        self._box_suppressed = (
+                            BOX_SUPPRESS_UPDATES
+                        )
+                        self._box_streak = 0
+                        logger.warning(
+                            "box stuck open for %d updates in "
+                            "NORMAL (paid offer?) — "
+                            "suppressing open_box for %d "
+                            "updates",
+                            BOX_STUCK_UPDATES,
+                            BOX_SUPPRESS_UPDATES,
+                        )
+                else:
+                    self._box_streak = 0
+                    self._box_suppressed = 0
+                if self._box_suppressed > 0:
+                    self._box_suppressed -= 1
+                    if self._box_suppressed == 0:
+                        self._box_streak = 0
 
             acted = self._apply_rules(
                 detections,
                 STATE_RULES.get(self.state, NORMAL_RULES),
             )
 
-            # Só NORMAL explora: nos outros estados estamos
-            # dentro de um painel, e swipe atrapalharia.
+            # Only NORMAL explores: in the other states we are
+            # inside a panel, and swiping would get in the way.
             if self.state == NORMAL and (
                 not SWIPE_WAIT_FOR_NO_ACTION or not acted
             ):
@@ -411,21 +511,32 @@ class StateMachine:
                 self._explore_screen()
 
     def _apply_rules(self, detections, rules):
-        """Executa a 1ª regra cuja categoria apareça; devolve True se achou algo (mesmo que a ação seja barrada por cooldown), pois achar já significa que não estamos perdidos."""
+        """Runs the 1st rule whose category shows up; returns True if it found something (even when the action is blocked by cooldown), because finding already means we are not lost."""
 
         for prioridade, (category, action, next_state) in enumerate(
             rules,
             start=1,
         ):
 
-            # Supressão ativa: pula up_food para que regras de
-            # prioridade menor (upgrades de outras estações)
-            # tenham a vez. A detecção continua rodando — é o
-            # que conta o streak e percebe quando o painel some.
-            if (
-                self.state == NORMAL
-                and category == "up_food"
-                and self._up_food_suppressed > 0
+            # Active suppression: skips up_food so lower-
+            # priority rules (other stations' upgrades)
+            # get their turn. Detection keeps running — that is
+            # what counts the streak and notices when the panel is gone.
+            # Same for the gray pair (even higher priority):
+            # without this it would starve up_food forever.
+            if self.state == NORMAL and (
+                (
+                    category == "up_food"
+                    and self._up_food_suppressed > 0
+                )
+                or (
+                    category in GRAY_DISMISS_CATEGORIES
+                    and self._gray_suppressed > 0
+                )
+                or (
+                    category == "box"
+                    and self._box_suppressed > 0
+                )
             ):
                 continue
 
@@ -434,9 +545,9 @@ class StateMachine:
             if detection is None:
                 continue
 
-            # Em DEBUG, mostra qual prioridade venceu e o que
-            # estava na tela junto. É o que responde "por que
-            # clicou nisso e não naquilo".
+            # In DEBUG, shows which priority won and what
+            # was on screen with it. That is what answers "why
+            # did it click this and not that".
             if logger.isEnabledFor(logging.DEBUG):
 
                 na_tela = " ".join(
@@ -469,7 +580,19 @@ class StateMachine:
         return False
 
     def _act(self, action, detection, next_state=None):
-        """Único lugar do projeto que dispara ação e troca estado."""
+        """Single place in the project that fires an action and switches state."""
+
+        # Foreground gate: never tap when another app (settings,
+        # Gmail, Play sheet) is in front — a paper-plane match on
+        # Gmail's send arrow must not become a sent email.
+        if not self._game_in_foreground:
+            now = time.monotonic()
+            if now - self._foreground_warned > 5.0:
+                logger.warning(
+                    "Game not in foreground — holding all actions."
+                )
+                self._foreground_warned = now
+            return False
 
         if not self._can_act():
             return False
@@ -480,7 +603,7 @@ class StateMachine:
 
         if not self.action_manager.execute(action, detection):
 
-            # Worker ocupado: tenta no próximo frame.
+            # Worker busy: try on the next frame.
             return False
 
         confidence = (
@@ -498,19 +621,18 @@ class StateMachine:
 
         self.last_action_time = time.monotonic()
 
-        # `scroll_bottom` é seis swipes seguidos: move a vista
-        # mais que qualquer swipe solto, e por isso merece a
-        # espera longa igual. Um toque comum fica na curta.
+        # `scroll_bottom` is six swipes in a row: it moves the view
+        # more than any single swipe, so it deserves the
+        # same long wait. A plain tap keeps the short one.
         self._last_was_swipe = action in VIEW_MOVING_ACTIONS
 
-        # Swipe real: itens ignorados podem estar em posição
-        # diferente agora, ou terem saído de tela. Vale a pena
-        # tentar de novo.
+        # Real swipe: ignored items may now be in a different
+        # position, or off screen. Worth trying again.
         if self._last_was_swipe:
             self._reset_food_tracking()
 
-        # Mesmo raciocínio do ciclo, abaixo: só conta o que
-        # realmente saiu.
+        # Same reasoning as the cycle below: only counts what
+        # actually went out.
         self.action_counts[action] += 1
 
         if detection:
@@ -519,9 +641,9 @@ class StateMachine:
         self.last_action = action
         self.last_action_at = self.last_action_time
 
-        # Aqui, e não em _apply_rules: este é o ponto em que a
-        # ação SAIU de verdade. Marcar antes contaria ciclo em
-        # tentativa barrada por cooldown ou worker ocupado.
+        # Here, not in _apply_rules: this is the point where the
+        # action REALLY went out. Marking earlier would count cycles on
+        # attempts blocked by cooldown or a busy worker.
         if detection and detection["category"] in CYCLE_CATEGORIES:
 
             self._mark_cycle(detection["category"])
@@ -537,16 +659,16 @@ class StateMachine:
 
             self._enter(next_state)
 
-        # Depois do _enter (que não toca em _food_target): guarda
-        # QUAL item entrou em FOOD, para _wait_or_give_up saber o
-        # que ignorar se ele desistir.
+        # After _enter (which does not touch _food_target): stores
+        # WHICH item entered FOOD, so _wait_or_give_up knows what
+        # to ignore if it gives up.
         if action == "food":
             self._food_target = detection
 
         return True
 
     def _record(self, action, detection):
-        """Entrega ao gravador a ação que ACABOU de sair; chamado de dentro de _act pois é o único ponto onde se sabe que ela não foi barrada por cooldown ou worker ocupado."""
+        """Hands the recorder the action that JUST went out; called from inside _act because that is the only point where we know it was not blocked by cooldown or a busy worker."""
 
         if self.recorder is None:
             return
@@ -557,8 +679,8 @@ class StateMachine:
         self.recorder.on_action(
             action=action,
 
-            # swipe_* não está em ACTION_TABLE: é a exploração,
-            # que chama o ActionManager por outro caminho.
+            # swipe_* is not in ACTION_TABLE: it is exploration,
+            # which calls the ActionManager through another path.
             action_kind=(
                 "swipe"
                 if action.startswith("swipe_")
@@ -566,8 +688,8 @@ class StateMachine:
             ),
             detection=detection,
 
-            # Ponto tocado no espaço da IMAGEM gravada.
-            # None para o swipe: não é um toque pontual.
+            # Tap point in the RECORDED image space.
+            # None for swipes: not a point tap.
             click=(
                 None
                 if action.startswith("swipe_")
@@ -608,7 +730,7 @@ class StateMachine:
         self.cycle_at = agora
 
     def cycle_stats(self):
-        """(tempo_corrido, ultimo_ciclo, quantos) para o HUD; ultimo_ciclo é None até o primeiro build/plane."""
+        """(elapsed time, last cycle, count) for the HUD; last cycle is None until the first build/plane."""
 
         return (
             time.monotonic() - self.cycle_at,
@@ -617,7 +739,7 @@ class StateMachine:
         )
 
     def summary(self):
-        """O que interessa a quem olha a tela, num dict — nomes de negócio (voos, reformas), não de código."""
+        """What matters to whoever watches the screen, as a dict — business names (flights, renovations), not code names."""
 
         return {
             "estado": self.state,
@@ -628,14 +750,14 @@ class StateMachine:
                 else time.monotonic() - self.last_action_at
             ),
 
-            # `fly` é o botão do avião na tela de reforma; é ele
-            # que efetivamente muda de restaurante.
+            # `fly` is the plane button on the renovation screen; it is
+            # what effectively changes restaurants.
             "voos": self.category_counts.get("fly", 0),
 
-            # `build` e `plane` são as duas portas para RENOVATE
-            # (CYCLE_CATEGORIES). Somadas, é quantas vezes o bot
-            # entrou numa reforma; `cycle_count` conta o mesmo
-            # evento, e serve de conferência.
+            # `build` and `plane` are the two doors into RENOVATE
+            # (CYCLE_CATEGORIES). Summed, it is how many times the bot
+            # entered a renovation; `cycle_count` counts the same
+            # event, and serves as a cross-check.
             "reformas": sum(
                 self.category_counts.get(categoria, 0)
                 for categoria in CYCLE_CATEGORIES
@@ -645,7 +767,7 @@ class StateMachine:
         }
 
     def _trap_guard(self, action, detection):
-        """NORMAL só: up_food que sobrevive a UPGRADE_FOOD_MAX_REPEATS presses cai para "dismiss" (HOLD em ponto fixo, sem detecção) por UPGRADE_FOOD_DISMISS_ROUNDS rodadas; depois o ciclo recomeça e o press ganha outra chance. Qualquer outra ação zera a contagem."""
+        """NORMAL only: up_food surviving UPGRADE_FOOD_MAX_REPEATS presses falls back to "dismiss" (HOLD on a fixed point, no detection) for UPGRADE_FOOD_DISMISS_ROUNDS rounds; then the cycle restarts and the press gets another chance. Any other action resets the count."""
 
         if self.state != NORMAL or action != "upgrade_food":
             self._up_food_repeats = 0
@@ -675,11 +797,11 @@ class StateMachine:
         return action, detection
 
     def _escalate(self, action):
-        """Escada de fechamento: N tentativas no ponto fixo, depois rola até o fim e tenta de novo — o ponto pode ser o que ABRE o painel, então tocar nele às vezes reabre em vez de fechar; não há BACK neste jogo."""
+        """Closing ladder: N attempts on the fixed point, then scroll to the end and try again — the point may be what OPENS the panel, so tapping it sometimes reopens instead of closing; there is no BACK in this game."""
 
         if action not in DISMISS_ACTIONS:
 
-            # Ação normal: progresso, zera a escada.
+            # Normal action: progress, reset the ladder.
             self._dismiss_attempts = 0
             self._dismiss_rounds = 0
 
@@ -693,8 +815,8 @@ class StateMachine:
         ):
             return action
 
-        # Estourou as tentativas no ponto: rola e reinicia a
-        # contagem, para tentar o ponto de novo depois.
+        # Out of point attempts: scroll and restart the
+        # count, to try the point again later.
         self._dismiss_attempts = 0
         self._dismiss_rounds += 1
 
@@ -710,7 +832,7 @@ class StateMachine:
         return "scroll_bottom"
 
     def _count_repeat(self, action):
-        """Avisa quando a mesma ação repete sem levar a nada (sintoma típico: ponto de dispensa que não fecha o painel)."""
+        """Warns when the same action repeats without leading anywhere (typical symptom: a dismiss point that does not close the panel)."""
 
         if action != self._last_action:
 
@@ -734,14 +856,14 @@ class StateMachine:
         )
 
     def frame_floor(self):
-        """Instante de CAPTURA mínimo para um frame autorizar ação. Definição única, compartilhada com o VisionWorker (evita divergir e agir sobre tela velha); conta do FIM da ação, não da submissão, pois ações assíncronas variam de duração (swipe 500ms, long press de comida 4s); piso final é o maior entre a espera de entrada no estado e a de settle pós-ação."""
+        """Minimum CAPTURE instant for a frame to authorize an action. Single definition, shared with the VisionWorker (avoids diverging and acting on a stale screen); counted from the END of the action, not submission, since async actions vary in duration (500ms swipe, 4s food long press); the final floor is the largest of the state-entry wait and the post-action settle."""
 
-        # Espera de entrada independe da última ação: uma tela
-        # que abriu com animação não fica pronta só porque o
-        # toque assentou (sem isto, upgrade era fechado ainda na
-        # animação, quando só o "X" já casava). O `if` evita que
-        # um estado SEM espera de entrada barre por empate o
-        # primeiro frame de idade zero (piso == state_entered).
+        # Entry wait does not depend on the last action: a screen
+        # that opened with an animation is not ready just because the
+        # tap settled (without this, upgrade was closed mid-
+        # animation, when only the "X" matched yet). The `if` keeps a
+        # state WITHOUT entry wait from blocking on a tie the
+        # first zero-age frame (floor == state_entered).
         entrada = STATE_ENTRY_SETTLE.get(self.state, 0.0)
 
         piso = (
@@ -772,8 +894,8 @@ class StateMachine:
 
     def _can_act(self):
 
-        # Ação em andamento (ex.: long press de 4 s) precisa
-        # terminar antes da próxima.
+        # An in-flight action (e.g. 4 s long press) must
+        # finish before the next one.
         if self.action_manager.is_busy():
             return False
 
@@ -782,13 +904,13 @@ class StateMachine:
         if agora - self.last_action_time < self.action_cooldown:
             return False
 
-        # O cooldown não basta: com o detector atrasado, a
-        # detecção em mão pode vir de frame ANTERIOR à última
-        # ação (sintoma: duplo toque reabrindo painel — o ponto
-        # de dispensa costuma ser também o que abre). A condição
-        # certa é causal (frame posterior ao FIM da ação, ver
-        # frame_floor), não temporal — um cooldown maior só
-        # atrasaria o mesmo problema com um detector mais lento.
+        # Cooldown is not enough: with a lagging detector, the
+        # detection in hand may come from a frame BEFORE the last
+        # action (symptom: double taps reopening panels — the
+        # dismiss point is often also what opens them). The right
+        # condition is causal (frame after the END of the action, see
+        # frame_floor), not temporal — a longer cooldown would only
+        # delay the same problem under a slower detector.
         piso = self.frame_floor()
 
         if (
@@ -836,16 +958,20 @@ class StateMachine:
         self.state = state
         self.state_entered = time.monotonic()
 
-        # Variáveis locais do estado anterior não vazam
-        # para o próximo.
+        # Previous-state locals do not leak
+        # into the next one.
         self.up_food_wait_start = None
 
-        # Trocar de estado é progresso: as contagens zeram.
+        # Switching state is progress: counts reset.
         self._last_action = None
         self._repeat_count = 0
         self._up_food_repeats = 0
         self._up_food_streak = 0
         self._up_food_suppressed = 0
+        self._gray_streak = 0
+        self._gray_suppressed = 0
+        self._box_streak = 0
+        self._box_suppressed = 0
         self._dismiss_attempts = 0
         self._dismiss_rounds = 0
 
@@ -876,7 +1002,7 @@ class StateMachine:
         return True
 
     def _food(self, detections):
-        """Segura o botão de upgrade de comida e espera o próximo aparecer; sem próximo em UP_FOOD_WAIT, volta para NORMAL."""
+        """Holds the food upgrade button and waits for the next one to appear; with no next one in UP_FOOD_WAIT, returns to NORMAL."""
 
         up_food = self._find(detections, "up_food")
 
@@ -890,10 +1016,10 @@ class StateMachine:
 
             return
 
-        # Painel esgotado: dispensa (DISMISS_POINT ou
-        # GRAY_COIN_POINT). ANTES do _wait_or_give_up, não
-        # depois: ele pode chamar _enter(NORMAL), e um _act
-        # depois disso agiria fora do estado FOOD.
+        # Exhausted panel: dismiss (DISMISS_POINT or
+        # GRAY_COIN_POINT). BEFORE _wait_or_give_up, not
+        # after: it may call _enter(NORMAL), and an _act
+        # after that would act outside the FOOD state.
         for categoria, acao in (
             ("gray_max", "gray_max"),
             ("gray_coin", "gray_coin"),
@@ -912,7 +1038,7 @@ class StateMachine:
         self._wait_or_give_up()
 
     def _new_point(self, detections):
-        """Igual ao FOOD, mas basta um clique para liberar — não é long press."""
+        """Same as FOOD, but a single click releases it — not a long press."""
 
         unlock_food = self._find(detections, "up_food")
 
@@ -929,7 +1055,7 @@ class StateMachine:
         self._wait_or_give_up()
 
     def _wait_or_give_up(self):
-        """Tela pode demorar para atualizar após agir; espera UP_FOOD_WAIT antes de desistir."""
+        """The screen may take a while to update after acting; waits UP_FOOD_WAIT before giving up."""
 
         if self.up_food_wait_start is None:
             return
@@ -952,7 +1078,7 @@ class StateMachine:
         self._enter(NORMAL)
 
     def _register_food_failure(self, target):
-        """Conta desistências SEGUIDAS no mesmo item (por IoU); ao chegar em FOOD_MAX_ATTEMPTS, ignora até o próximo swipe — antes disso, volta a NORMAL e deixa tentar de novo (pode ter sido só o up_food demorando a aparecer)."""
+        """Counts CONSECUTIVE give-ups on the same item (by IoU); on reaching FOOD_MAX_ATTEMPTS, ignores it until the next swipe — before that, returns to NORMAL and lets it try again (it may just be up_food slow to appear)."""
 
         if (
             self._food_fail_target is not None
@@ -981,7 +1107,7 @@ class StateMachine:
         self._food_fail_count = 0
 
     def _reset_food_tracking(self):
-        """Esquece itens ignorados e a contagem de tentativas — chamado a cada swipe real, que muda o que está na tela."""
+        """Forgets ignored items and the attempt count — called on every real swipe, which changes what is on screen."""
 
         self._ignored_food = []
 
@@ -989,7 +1115,7 @@ class StateMachine:
         self._food_fail_count = 0
 
     def _find(self, detections, category):
-        """Primeira detecção da categoria. Sem refiltragem por threshold aqui de propósito: já existiu um segundo threshold neste método, divergente do detector, e o escolhido era o primeiro em ordem alfabética de arquivo, não o melhor."""
+        """First detection of the category. No threshold refiltering here on purpose: a second threshold once lived in this method, diverging from the detector's, and the winner was the first in filename alphabetical order, not the best."""
 
         for detection in detections:
 
@@ -1006,7 +1132,7 @@ class StateMachine:
         return None
 
     def _is_ignored_food(self, detection):
-        """Mesmo item de um 'food' que já esgotou UP_FOOD_WAIT sem up_food (mesma posição na tela, comparada por IoU já que a tela não se move fora de um swipe)."""
+        """Same item as a 'food' that already exhausted UP_FOOD_WAIT without up_food (same on-screen position, compared by IoU since the screen does not move outside a swipe)."""
 
         return any(
             self._iou(detection, ignored) >= FOOD_IGNORE_IOU
@@ -1048,7 +1174,7 @@ class StateMachine:
         self._reset_food_tracking()
 
     def _delay_exploration(self):
-        """Algo foi encontrado: ADIA o próximo swipe, sem resetar o ciclo de varredura (renomeado de `_reset_exploration` — resetar a contagem aqui fazia o bot varrer sempre o mesmo pedaço da tela, já que quase todo swipe acha algo)."""
+        """Something was found: POSTPONES the next swipe without resetting the sweep cycle (renamed from `_reset_exploration` — resetting the count here made the bot always sweep the same slice of the screen, since almost every swipe finds something)."""
 
         if not SWIPE_WAIT_FOR_NO_ACTION:
             return
@@ -1058,7 +1184,7 @@ class StateMachine:
         self.explore_found = True
 
     def exploration_interval(self):
-        """Quanto esperar pelo próximo swipe: exploration_delay se nada foi achado, exploration_action_delay (maior) se sim — derivado de explore_found em vez de guardado."""
+        """How long to wait for the next swipe: exploration_delay when nothing was found, exploration_action_delay (longer) when it was — derived from explore_found instead of stored."""
 
         return (
             self.exploration_action_delay
@@ -1093,25 +1219,25 @@ class StateMachine:
 
         self.last_action_time = now
 
-        # Volta ao RITMO normal: a partir daqui o próximo swipe
-        # é em exploration_delay. Achar algo é o que troca isso
-        # pelos 15 s (_delay_exploration).
+        # Back to the NORMAL pace: from here the next swipe
+        # is in exploration_delay. Finding something is what switches that
+        # to the 15 s (_delay_exploration).
         self.explore_anchor = now
 
         self.explore_found = False
 
-        # A partir daqui vale SWIPE_WAITING_TIME, não
-        # ACTION_SETTLE: a vista acabou de se mover inteira, e
-        # nenhuma detecção de antes dela parar vale um toque.
+        # From here on SWIPE_WAITING_TIME applies, not
+        # ACTION_SETTLE: the view just moved as a whole, and
+        # no detection from before it settles is worth a tap.
         self._last_was_swipe = True
 
-        # Swipe real: dá nova chance aos itens ignorados.
+        # Real swipe: ignored items get a new chance.
         self._reset_food_tracking()
 
-        # A exploração não passa por _act, então precisa gravar
-        # aqui. É decisão do bot como qualquer outra: "não achei
-        # nada, rolo a tela" — e para o treino subir e descer são
-        # rótulos diferentes, daí a direção ir no NOME.
+        # Exploration does not go through _act, so it must record
+        # here. It is a bot decision like any other: "found
+        # nothing, scrolling the screen" — and for training up and down are
+        # different labels, hence the direction in the NAME.
         self._record(
             f"swipe_{self.swipe_direction}",
             None,

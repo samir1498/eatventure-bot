@@ -1,4 +1,4 @@
-"""Medidores de taxa e duração, compartilhados entre captura e detector para não duplicar a conta."""
+"""Rate and duration meters, shared between capture and detector to avoid double counting."""
 
 import threading
 import time
@@ -6,7 +6,7 @@ from collections import deque
 
 
 class RateMeter:
-    """Eventos por segundo em janela deslizante — média desde o início esconderia o momento em que o stream engasgou."""
+    """Events per second over a sliding window — average-since-start would hide when the stream stalled."""
 
     def __init__(self, window=2.0):
 
@@ -42,7 +42,7 @@ class RateMeter:
             if elapsed <= 0:
                 return 0.0
 
-            # n eventos delimitam n-1 intervalos.
+            # n events delimit n-1 intervals.
             return (len(self.timestamps) - 1) / elapsed
 
     def _trim(self, now):
@@ -55,7 +55,7 @@ class RateMeter:
 
 
 class DurationMeter:
-    """Média móvel exponencial de duração — barata (um float), sem histórico."""
+    """Exponential moving average of duration — cheap (one float), no history."""
 
     def __init__(self, smoothing=0.2):
 
@@ -87,7 +87,7 @@ class DurationMeter:
 
 
 def formata_duracao(segundos):
-    """Duração legível de relance: "42s", "3m07s", "1h04m". Segundo cheio, nunca decimal — leitura é de canto de olho."""
+    """Glanceable duration: "42s", "3m07s", "1h04m". Whole seconds, never decimal — corner-of-the-eye reading."""
 
     if segundos is None:
         return "--"

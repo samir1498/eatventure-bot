@@ -1,4 +1,4 @@
-"""Visualizador do stream cru, sem detecção (python src/test_main.py) — para conferir a captura antes de culpar o detector."""
+"""Raw stream viewer, no detection (python src/test_main.py) — for checking capture before blaming the detector."""
 
 import argparse
 import sys
@@ -35,7 +35,7 @@ def main(argv=None):
 
     args = parser.parse_args(argv)
 
-    # Mesma escolha do main.py: sem o -s, com dois devices o adb recusa toda chamada.
+    # Same choice as main.py: without -s, with two devices adb refuses every call.
     capture = ScreenCapture(
         devices.resolver(args.device or DEVICE_SERIAL)
     )

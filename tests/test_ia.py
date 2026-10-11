@@ -1,8 +1,8 @@
 """
-Testes do treino e do bot de IA. Ficam aqui e não em IA/, porque IA/ roda
-treino e inferência de verdade. Nada aqui treina modelo nem toca em
-device — o alvo é dano silencioso: features de treino/inferência
-divergindo, split com vazamento, ou mapeamento de coordenada errado.
+Training and AI-bot tests. They live here and not in IA/, because IA/ runs
+real training and inference. Nothing here trains a model or touches a
+device — the target is silent damage: train/inference features
+diverging, leaky splits, or wrong coordinate mapping.
 """
 
 import json
@@ -28,7 +28,7 @@ import dataset_io as dio                           # noqa: E402
 
 
 def frame_com_alvo(alvo=(300, 1500, 96, 88), cor=(40, 200, 255)):
-    """Frame do tamanho do device, com um bloco colorido na posição da caixa."""
+    """Device-sized frame, with a colored block at the box position."""
 
     imagem = np.full((2400, 1080, 3), 30, np.uint8)
 
@@ -85,9 +85,9 @@ def registro(
 
 def test_recorte_pega_o_objeto_e_nao_a_tela():
     """
-    Defeito da versão anterior: reduzir 1080x2400 para 32x32 fazia o
-    alvo de 95x94 px virar 2.8x1.3 px. O recorte tem de conter o objeto
-    de verdade, dominando o quadro.
+    Previous-version defect: shrinking 1080x2400 to 32x32 turned the
+    95x94 px target into 2.8x1.3 px. The crop must contain the real
+    object, dominating the frame.
     """
 
     alvo = (300, 1500, 96, 88)
@@ -101,23 +101,23 @@ def test_recorte_pega_o_objeto_e_nao_a_tela():
 
     assert recorte is not None
 
-    # Com margem de 25%, o objeto ocupa cerca de (1/1.5)^2 = 44%
-    # do recorte. Bem longe de 3 pixels numa tela inteira.
+    # With a 25% margin, the object covers about (1/1.5)^2 = 44%
+    # of the crop. Far from 3 pixels on a whole screen.
     brancos = int((recorte > 200).all(axis=2).sum())
 
     fracao = brancos / (recorte.shape[0] * recorte.shape[1])
 
     assert 0.3 < fracao < 0.8, fracao
 
-    # E para comparar: na tela inteira reduzida a 32x32, o mesmo
-    # alvo praticamente não existe.
+    # And for comparison: on the whole screen shrunk to 32x32, the same
+    # target barely exists.
     inteira = feat.screen_features(imagem)
 
     assert inteira is not None
 
 
 def test_features_tem_tamanho_declarado():
-    """Se FEATURE_SIZE mentir, a checagem contra `n_features_in_` passa e o modelo erra a entrada."""
+    """If FEATURE_SIZE lies, the check against `n_features_in_` passes and the model gets the wrong input."""
 
     imagem = frame_com_alvo()
 
@@ -136,7 +136,7 @@ def test_features_tem_tamanho_declarado():
 
 
 def test_features_sao_deterministicas():
-    """Sem isso o treino aprende uma coisa e a inferência vê outra."""
+    """Without this, training learns one thing and inference sees another."""
 
     imagem = frame_com_alvo()
 
@@ -149,7 +149,7 @@ def test_features_sao_deterministicas():
 
 
 def test_features_distinguem_cores():
-    """O histograma HSV existe porque o jogo codifica por cor."""
+    """The HSV histogram exists because the game encodes by color."""
 
     caixa = {"x": 300, "y": 1500, "width": 96, "height": 88}
 
@@ -167,7 +167,7 @@ def test_features_distinguem_cores():
 
 
 def test_recorte_fora_da_imagem_nao_estoura():
-    """Caixa parcialmente fora do frame acontece de verdade (objeto na borda)."""
+    """A partially out-of-frame box really happens (object on the edge)."""
 
     imagem = frame_com_alvo()
 
@@ -179,8 +179,8 @@ def test_recorte_fora_da_imagem_nao_estoura():
 
         vetor = feat.box_features(imagem, caixa)
 
-        # Ou devolve vetor do tamanho certo, ou None. O que não
-        # pode é estourar nem devolver tamanho errado.
+        # Either returns a correctly-sized vector, or None. What it
+        # must not do is blow up or return the wrong size.
         if vetor is not None:
             assert len(vetor) == feat.FEATURE_SIZE, caixa
 
@@ -196,8 +196,8 @@ def test_recorte_degenerado_devolve_none():
 
 def test_split_nao_reparte_o_mesmo_grupo():
     """
-    Erro que invalidava a acurácia anterior: 56% das amostras têm phash
-    repetido, e o split aleatório colocava o mesmo quadro em treino e teste.
+    Error that invalidated the previous accuracy: 56% of samples have a
+    repeated phash, and the random split put the same frame in train and test.
     """
 
     registros = [
@@ -224,7 +224,7 @@ def test_split_nao_reparte_o_mesmo_grupo():
 
 
 def test_split_por_sessao_separa_sessoes():
-    """O teste mais duro: treinar numa partida e avaliar em outra."""
+    """The toughest test: train on one session and evaluate on another."""
 
     registros = [
         registro(f"r{i}", sessao=f"s{i % 4}", phash=f"h{i}")
@@ -244,7 +244,7 @@ def test_split_por_sessao_separa_sessoes():
 
 
 def test_split_e_reproduzivel():
-    """Mesma semente, mesmo split — senão comparar duas execuções não quer dizer nada."""
+    """Same seed, same split — otherwise comparing two runs means nothing."""
 
     registros = [
         registro(f"r{i}", phash=f"h{i % 12}")
@@ -262,7 +262,7 @@ def test_split_e_reproduzivel():
 
 
 def test_split_nunca_deixa_teste_vazio():
-    """Com poucos grupos, arredondar para cima levaria tudo ao treino e zeraria o teste."""
+    """With few groups, rounding up would send everything to train and empty the test set."""
 
     registros = [registro(f"r{i}", phash="unico") for i in range(5)]
     registros += [registro("outro", phash="segundo")]
@@ -287,7 +287,7 @@ def test_baseline_da_maioria():
 
 
 def test_baseline_do_estado():
-    """A referência que expôs o problema: 46.2% no dataset real contra menos de 30% do modelo."""
+    """The baseline that exposed the problem: 46.2% on the real dataset vs under 30% for the model."""
 
     registros = (
         [registro(f"a{i}", acao="upgrade_item", estado="UPGRADE")
@@ -298,16 +298,16 @@ def test_baseline_do_estado():
            for i in range(10)]
     )
 
-    # UPGRADE: chuta upgrade_item, acerta 8/10.
-    # NORMAL: chuta open_box, acerta 10/10.
+    # UPGRADE: guesses upgrade_item, gets 8/10 right.
+    # NORMAL: guesses open_box, gets 10/10 right.
     assert abs(dio.state_baseline(registros) - 0.9) < 1e-9
 
 
 def test_teto_por_estado_e_categorias():
     """
-    Justifica a arquitetura: se estado + categorias resolve quase toda a
-    escolha de ação, o modelo só precisa aprender a DETECTAR — a ação
-    sai da tabela de prioridade que já existe.
+    Justifies the architecture: if state + categories solves almost all
+    action choice, the model only needs to learn DETECTION — the action
+    comes from the priority table that already exists.
     """
 
     def com_categorias(identificador, cats, acao, estado="NORMAL"):
@@ -336,15 +336,15 @@ def test_teto_por_estado_e_categorias():
 
     assert dio.ceiling_state_categories(registros) == 1.0
 
-    # Mesma entrada com rótulo diferente = teto abaixo de 100%,
-    # e é exatamente o ruído irredutível que limita o modelo.
+    # Same input with a different label = ceiling below 100%,
+    # and that's exactly the irreducible noise limiting the model.
     registros.append(com_categorias("e", ["box"], "upgrade"))
 
     assert dio.ceiling_state_categories(registros) < 1.0
 
 
 def test_filtro_por_outcome():
-    """Treinar só em `changed` impede o modelo de herdar os erros do template matcher."""
+    """Training only on `changed` stops the model from inheriting the template matcher's mistakes."""
 
     registros = [
         registro("a", outcome="changed"),
@@ -358,8 +358,8 @@ def test_filtro_por_outcome():
 
     assert [r["id"] for r in apenas] == ["a"]
 
-    # As negativas entram quando pedidas explicitamente: sem
-    # elas o modelo aprende que sempre existe alvo.
+    # Negatives enter when explicitly requested: without
+    # them the model learns a target always exists.
     com_negativa = dio.filter_by_outcome(
         registros,
         ["changed", "negative"],
@@ -369,7 +369,7 @@ def test_filtro_por_outcome():
 
 
 def test_negativos_nao_caem_sobre_as_caixas():
-    """Negativo sobre um objeto ensina o contrário: que aquele objeto é fundo."""
+    """A negative over an object teaches the opposite: that the object is background."""
 
     caixas = [
         {"category": "box", "x": 300, "y": 1500,
@@ -438,14 +438,13 @@ def test_iou():
 
 
 # =========================================================
-# LEITURA DO ÍNDICE
+# INDEX READING
 # =========================================================
 
 def test_leitura_ignora_linha_invalida_e_imagem_ausente():
     """
-    O samples.jsonl é append de uma thread: se a sessão morreu
-    no meio, a última linha pode estar truncada. Isso não pode
-    derrubar o treino.
+    samples.jsonl is a thread append: if the session died halfway,
+    the last line may be truncated. That must not take down training.
     """
 
     pasta = Path(tempfile.mkdtemp())
@@ -489,7 +488,7 @@ def test_leitura_ignora_linha_invalida_e_imagem_ausente():
 
         assert aviso["sem_imagem"] == 2
 
-        # O caminho resolvido tem de existir de verdade.
+        # The resolved path must really exist.
         assert registros[0]["_path"].exists()
 
     finally:
@@ -519,13 +518,13 @@ def test_indice_ausente_da_erro_com_instrucao():
 
 
 # =========================================================
-# RÓTULOS
+# LABELS
 # =========================================================
 
 def test_negativa_vira_classe_propria():
     """
-    "não fazer nada" é uma decisão. Descartar as negativas
-    ensina que sempre há algo a fazer.
+    "doing nothing" is a decision. Dropping negatives
+    teaches that there's always something to do.
     """
 
     assert dio.action_label(registro("a", acao=None)) == "negative"
@@ -535,8 +534,8 @@ def test_negativa_vira_classe_propria():
 
 def test_todas_as_caixas_viram_exemplo():
     """
-    É isso que dá 65.730 exemplos a partir de 29.297 frames: as
-    caixas que NÃO viraram ação também são rótulo.
+    That's what yields 65,730 examples from 29,297 frames: the
+    boxes that did NOT become an action are labels too.
     """
 
     caixas = [
@@ -573,23 +572,23 @@ def test_caixa_degenerada_e_ignorada():
 
 def test_proponente_acha_bloco_colorido():
     """
-    Proponente é EXPERIMENTAL: substitui os 184 templates por proposta
-    de região. Só verifica o contrato geométrico; em tela real precisa
-    de `--debug-proposals` — nenhum teste sintético prova isso.
+    Proposer is EXPERIMENTAL: replaces the 184 templates with region
+    proposals. Only verifies the geometric contract; on a real screen it
+    needs `--debug-proposals` — no synthetic test proves that.
     """
 
     import proposer
 
     imagem = np.full((2400, 1080, 3), 40, np.uint8)
 
-    # Bloco bem saturado, do tamanho de um botão real.
+    # Block well saturated, real-button sized.
     imagem[1500:1588, 300:396] = (255, 120, 20)
 
     candidatos = proposer.propose(imagem)
 
     assert candidatos, "não propôs nada"
 
-    # Algum candidato tem de cobrir o bloco.
+    # Some candidate must cover the block.
     alvo = (300, 1500, 96, 88)
 
     melhor = max(
@@ -605,7 +604,7 @@ def test_proponente_respeita_limites_de_tamanho():
 
     imagem = np.full((2400, 1080, 3), 40, np.uint8)
 
-    # Muito pequeno e muito grande: nenhum pode passar.
+    # Too small and too big: none may pass.
     imagem[100:110, 100:110] = (255, 120, 20)
     imagem[500:900, 0:1080] = (255, 120, 20)
 
@@ -618,7 +617,7 @@ def test_proponente_respeita_limites_de_tamanho():
 
 
 def test_proponente_tem_teto_de_candidatos():
-    """Cada candidato custa uma classificação; sem teto, uma tela cheia de cor derruba o FPS."""
+    """Each candidate costs a classification; without a cap, a color-filled screen kills FPS."""
 
     import proposer
 
@@ -655,9 +654,9 @@ def test_supressao_remove_repetidos_da_mesma_categoria():
 
     deteccoes = [
         det("box", 100, 100, 0.9),
-        det("box", 105, 105, 0.7),     # mesma coisa, pior
-        det("food", 100, 100, 0.8),    # outra categoria, fica
-        det("box", 900, 900, 0.6),     # longe, fica
+        det("box", 105, 105, 0.7),     # same thing, worse
+        det("food", 100, 100, 0.8),    # other category, stays
+        det("box", 900, 900, 0.6),     # far away, stays
     ]
 
     mantidas = proposer.suppress(deteccoes)
@@ -668,12 +667,12 @@ def test_supressao_remove_repetidos_da_mesma_categoria():
 
     assert ("box", 105) not in caixas
 
-    # Sobrou a de maior confiança.
+    # The highest-confidence one survived.
     assert ("box", 100) in caixas
 
 
 def test_deteccao_do_modelo_tem_o_formato_que_a_maquina_le():
-    """Se o formato divergir do que vision/detector.py produz, o sintoma é bot parado, não erro."""
+    """If the format diverges from what vision/detector.py produces, the symptom is a stalled bot, not an error."""
 
     import bot_ai
 
@@ -697,8 +696,8 @@ def test_deteccao_do_modelo_tem_o_formato_que_a_maquina_le():
 
     deteccao = deteccoes[0]
 
-    # As chaves que core/state_machine.py e vision/detector.py
-    # usam.
+    # The keys that core/state_machine.py and vision/detector.py
+    # use.
     for chave in (
         "category", "name", "confidence",
         "color_similarity", "x", "y", "width", "height",
@@ -713,9 +712,9 @@ def test_deteccao_do_modelo_tem_o_formato_que_a_maquina_le():
 
 def test_maquina_de_estados_aceita_as_deteccoes_do_modelo():
     """
-    Fim a fim, sem device: detecção do modelo entra, ação sai, e o alvo
-    é a CAIXA — conserto do defeito anterior, que tocava sempre no
-    centro da tela.
+    End to end, no device: model detection goes in, action comes out, and the target
+    is the BOX — fix for the previous defect, which always tapped the
+    screen center.
     """
 
     import bot_ai
@@ -766,7 +765,7 @@ def test_maquina_de_estados_aceita_as_deteccoes_do_modelo():
 
     assert acao == "open_box", acao
 
-    # O alvo é a caixa detectada, não o meio da tela.
+    # The target is the detected box, not the screen center.
     assert alvo["x"] == 300 and alvo["y"] == 1500
 
     centro_da_tela = (1080 // 2, 2400 // 2)
@@ -778,7 +777,7 @@ def test_maquina_de_estados_aceita_as_deteccoes_do_modelo():
 
 
 def test_background_nao_vira_deteccao():
-    """"background" existe para o modelo dizer "aqui não tem nada"; se virasse detecção, agiria sobre cenário."""
+    """"background" exists so the model can say "nothing here"; if it became a detection, it would act on scenery."""
 
     import bot_ai
 
@@ -815,7 +814,7 @@ def test_confianca_baixa_e_descartada():
 
 
 def test_deteccoes_saem_ordenadas_por_confianca():
-    """A StateMachine pega a PRIMEIRA detecção de cada categoria: a ordem decide o alvo."""
+    """The StateMachine takes the FIRST detection of each category: order decides the target."""
 
     import bot_ai
 

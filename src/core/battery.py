@@ -1,4 +1,4 @@
-"""Leitura da bateria fora do caminho crítico: `dumpsys battery` custa ~56ms (>3x uma passada do detector), então roda em thread própria e o loop só lê o último valor em memória."""
+"""Battery reads off the critical path: `dumpsys battery` costs ~56ms (>3x one detector pass), so it runs on its own thread and the loop only reads the latest in-memory value."""
 
 import threading
 import time
@@ -19,16 +19,16 @@ class BatteryMonitor:
         self.running = False
         self.thread = None
 
-        # None = ainda não leu, ou o adb nunca deu certo.
+        # None = not read yet, or adb never succeeded.
         self.level = None
         self.charging = False
 
-        # Timestamp da leitura, para o HUD marcar valor velho.
+        # Reading timestamp, so the HUD can flag stale values.
         self.updated = 0.0
 
         self.lock = threading.Lock()
 
-        # Acorda a thread ao parar, sem esperar o intervalo inteiro.
+        # Wakes the thread on stop, without waiting the whole interval.
         self.wake = threading.Event()
 
     def start(self):
@@ -52,7 +52,7 @@ class BatteryMonitor:
 
         self.running = False
 
-        # Sem isto, encerrar o bot esperaria até BATTERY_POLL_INTERVAL.
+        # Without this, stopping the bot would wait up to BATTERY_POLL_INTERVAL.
         self.wake.set()
 
         if self.thread:
@@ -62,7 +62,7 @@ class BatteryMonitor:
             self.thread = None
 
     def get(self):
-        """(porcentagem, carregando, idade_em_segundos); porcentagem é None sem leitura ainda."""
+        """(percentage, charging, age_in_seconds); percentage is None with no reading yet."""
 
         with self.lock:
 
@@ -101,5 +101,5 @@ class BatteryMonitor:
                         " (charging)" if carregando else "",
                     )
 
-            # Espera interrompível.
+            # Interruptible wait.
             self.wake.wait(self.interval)

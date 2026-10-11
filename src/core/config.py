@@ -1,4 +1,4 @@
-﻿"""Configuração central do EatVenture AI — todo valor ajustável mora aqui, nenhum outro módulo deve ter número mágico."""
+﻿"""Central EatVenture AI configuration — every tunable value lives here, no other module should have magic numbers."""
 
 import os
 import platform
@@ -14,22 +14,24 @@ _EXE_SUFFIX = ".exe" if _IS_WINDOWS else ""
 
 # ==== DEVICE ====
 
-# None = detecta em runtime; fixe para evitar prompt repetido quando conectado via USB+WiFi simultaneamente.
+# None = detect at runtime; pin it to avoid repeated prompts when connected via USB+WiFi simultaneously.
 DEVICE_SERIAL = None
 
 
 # ==== GAME ====
 
-# Pacote do jogo: o bot garante que ele está em primeiro plano e o
-# relança sozinho se um anúncio ou o sistema o tirar da frente.
+# Game package: the bot keeps it in the foreground and
+# relaunches it alone if an ad or the system takes it away.
 GAME_PACKAGE = "com.hwqgrhhjfd.idlefastfood"
 
-# De quanto em quanto tempo checar o app em foco (dumpsys custa ~50ms,
-# não pode entrar em todo ciclo).
-GAME_ENSURE_INTERVAL = 15.0
+# How often to check the focused app (dumpsys costs ~50ms,
+# so it cannot run on every cycle). Kept tight on purpose:
+# between checks the bot would otherwise keep tapping
+# whatever is on screen (settings, Gmail, Play sheet).
+GAME_ENSURE_INTERVAL = 5.0
 
-# Espera mínima entre dois relançamentos (jogo abrindo não conta como
-# "fora da frente" de novo).
+# Minimum wait between two relaunches (a game still opening does not
+# count as "out of foreground" again).
 GAME_RELAUNCH_COOLDOWN = 30.0
 
 
@@ -219,39 +221,39 @@ TEMPLATE_SCALE_STEPS = (0.85, 0.92, 1.0, 1.08, 1.15)
 SHAPE_THRESHOLD = 0.80
 COLOR_THRESHOLD = 0.80
 
-# Quantas escalas de TEMPLATE_SCALE_STEPS a passada percorre por template.
-# Uma vez que um template bateu numa escala, as outras são desperdício: a
-# escala do device não muda sozinha. A passada usa só a escala vencedora e
-# volta a abrir o pente quando a categoria fica ESCALA_LIBERA_SECAS passadas
-# sem achar nada (zoom da câmera do jogo mudou, ou nunca foi calibrada).
+# How many scales of TEMPLATE_SCALE_STEPS each pass covers per template.
+# Once a template hits on one scale, the others are waste: the
+# device scale does not change on its own. The pass uses only the winning scale and
+# reopens the comb when the category goes ESCALA_LIBERA_SECAS passes
+# without finding anything (game camera zoom changed, or never calibrated).
 ESCALA_UNICA_POR_TEMPLATE = True
 ESCALA_LIBERA_SECAS = 6
 
-# Teto de detecções aprovadas por categoria numa passada: a StateMachine age
-# em UMA detecção por frame (_apply_rules), então varrer os 86 templates de
-# food depois de já ter 6 pratos na mão não muda nenhuma decisão. Só corta
-# DEPOIS de achar — passada parcial nunca vira "tela vazia", que dispararia
-# _explore_screen. Sobra margem para _is_ignored_food descartar alguns.
-# Categoria fora do dict é varrida inteira.
+# Cap of approved detections per category in one pass: the StateMachine acts
+# on ONE detection per frame (_apply_rules), so scanning all 86
+# food templates after already holding 6 dishes changes no decision. Only cuts
+# AFTER finding something — a partial pass never becomes an "empty screen", which would trigger
+# _explore_screen. Leaves margin for _is_ignored_food to discard a few.
+# A category outside the dict is scanned in full.
 CATEGORY_MATCH_BUDGET = {
     "food": 6,
     "new_point": 3,
 }
 
-# Quantos templates da categoria a passada olha antes de parar, e SÓ se já
-# achou alguma coisa. Sem isto, o teto acima não protege o caso em que os
-# primeiros templates da fila não batem: a passada percorreria os 86 de food
-# mesmo tendo 6 pratos na tela. Nada encontrado = varredura completa, sempre
-# (é o caso em que cortar cegaria o bot).
+# How many templates of the category the pass looks at before stopping, and ONLY if it
+# already found something. Without this, the cap above does not protect the case where the
+# first templates in the queue miss: the pass would scan all 86 food templates
+# even with 6 dishes on screen. Nothing found = full scan, always
+# (cutting there would blind the bot).
 CATEGORY_SCAN_QUOTA = {
     "food": 20,
     "new_point": 12,
 }
 
-# Por quanto tempo um template que bateu continua no início da fila da sua
-# categoria. Um restaurante tem ~6-10 pratos possíveis entre os 86 templates
-# de food; procurar os que apareceram há pouco antes dos outros faz o teto
-# acima ser atingido nos primeiros templates, não no quinquagésimo.
+# How long a template that hit stays at the front of its category queue.
+# A restaurant has ~6-10 possible dishes among the 86 food templates;
+# looking for recently seen ones before the others makes the cap
+# above be reached on the first templates, not the fiftieth.
 QUENTES_TTL = 30.0
 
 CATEGORY_THRESHOLDS = {
@@ -263,7 +265,7 @@ CATEGORY_THRESHOLDS = {
     "up_upgrade": 0.90,
     "close": 0.85,
     "plane": 0.98,
-    "box": 0.95,
+    "box": 0.90,
     "delivery": 0.95,
     "helper": 0.95,
 }
@@ -275,13 +277,13 @@ CATEGORY_COLOR_THRESHOLDS = {
 
 CATEGORY_ROIS = {}
 
-# Ao detectar via template default, grava o recorte na resolução exata do
-# device (mesmo na referência) — as próximas passadas usam esse override
-# em vez do default.
+# When detecting via default template, saves the crop at the exact
+# device resolution (even on the reference) — later passes use that override
+# instead of the default.
 LEARN_RESOLUTION_TEMPLATES = False
 
-# De quanto em quanto tempo checar se a pasta de templates mudou (template
-# novo, editado ou removido) e recarregar sem reiniciar o bot. 0 desliga.
+# How often to check whether the template folder changed (new,
+# edited, or removed template) and reload without restarting the bot. 0 disables.
 TEMPLATES_WATCH_INTERVAL = 0
 
 
@@ -290,11 +292,11 @@ TEMPLATES_WATCH_INTERVAL = 0
 DETECTOR_DEBUG_MISSES = False
 DETECTOR_DEBUG_INTERVAL = 3.0
 
-# Teto da escala do estágio grosso. _coarse_scale_for devolve
-# min(COARSE_SCALE, grade), então isto só vincula para template PEQUENO: com
-# teto 0.40, todo template de lado menor < 30px caía fora do estágio grosso
-# (12/0.40) e ia para matchTemplate em resolução cheia na TELA INTEIRA, o
-# caminho mais caro do detector. Template grande não muda (lado 100px -> 0.15).
+# Scale cap of the coarse stage. _coarse_scale_for returns
+# min(COARSE_SCALE, grade), so this only binds SMALL templates: with
+# cap 0.40, every template with side < 30px would fall out of the coarse stage
+# (12/0.40) and go to full-resolution matchTemplate on the WHOLE SCREEN, the
+# most expensive detector path. Large templates are unaffected (100px side -> 0.15).
 COARSE_SCALE = 0.70
 COARSE_SCALE_MIN = 0.10
 COARSE_SCALE_STEP = 0.05
@@ -311,7 +313,9 @@ UPGRADE_ITEM_CLICKS = 5
 UPGRADE_FOOD_PRESS = 4.0
 
 DISMISS_POINT = (10, 2200)
-GRAY_COIN_POINT = (1070, 250)
+# Left-edge middle: deliberately off the top-right corner, where
+# the settings gear lives — a gray_coin misfire must never open it.
+GRAY_COIN_POINT = (10, 1200)
 ACTION_POINTS = {
     "gray_coin": GRAY_COIN_POINT,
 }
@@ -333,6 +337,20 @@ UPGRADE_FOOD_DISMISS_ROUNDS = 2
 # interleaved side-actions can't hide the stuck panel.
 UPGRADE_FOOD_STUCK_UPDATES = 25
 UPGRADE_FOOD_SUPPRESS_UPDATES = 40
+
+# Same treatment one priority level up: gray_coin/gray_max (#4)
+# outrank up_food (#5), so a greyed-out price can starve the
+# whole panel the same way. Suppress the gray dismiss pair so
+# lower rules (up_food, station upgrades) get a turn.
+GRAY_STUCK_UPDATES = 25
+GRAY_SUPPRESS_UPDATES = 40
+
+# Same treatment for the reward chest: a "box" that stays visible
+# for N updates without resolving is a paid offer (e.g. starter
+# pack), not free loot — suppress open_box so the bot backs off
+# instead of tapping inside the paywall, then tries again later.
+BOX_STUCK_UPDATES = 25
+BOX_SUPPRESS_UPDATES = 40
 
 SCROLL_BOTTOM_DIRECTION = "up"
 SCROLL_BOTTOM_SWIPES = 6
