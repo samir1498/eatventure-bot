@@ -938,6 +938,12 @@ class Detector:
                 }
             )
 
+        if (
+            self._is_reference(frame_width, frame_height)
+            and not extras
+        ):
+            return self.by_category
+
         default_categorias = (
             self._defaults_for(frame_width, frame_height)
             if self.use_defaults
@@ -1397,7 +1403,7 @@ class Detector:
         if entrada is None:
             return True
 
-        _, _, quando, vistos = entrada
+        escala_vencedora, _, quando, vistos = entrada
 
         if agora - quando > QUENTES_TTL:
 
@@ -1413,9 +1419,11 @@ class Detector:
 
         if vistos == completo:
             # Promoted: only the winning scale
-            return vistos >> indice & 1
+            return template.get("escala") == escala_vencedora
 
-        # Provisional: only unseen scales
+        # Provisional: keep the winning scale active, or test unseen scales
+        if template.get("escala") == escala_vencedora:
+            return True
         return not (vistos >> indice & 1)
 
     @staticmethod

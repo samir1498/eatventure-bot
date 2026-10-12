@@ -1,4 +1,4 @@
-﻿"""Central EatVenture AI configuration — every tunable value lives here, no other module should have magic numbers."""
+"""Central EatVenture AI configuration — every tunable value lives here, no other module should have magic numbers."""
 
 import os
 import platform
@@ -74,7 +74,7 @@ else:
         except Exception:
             pass
 
-SCRCPY_SERVER_VERSION = "4.1"
+SCRCPY_SERVER_VERSION = "5.0.1"
 SCRCPY_PORT = 27283
 SCRCPY_DEVICE_JAR = "/data/local/tmp/eatventure-server.jar"
 
@@ -216,7 +216,7 @@ REFERENCE_WIDTH = 1080
 REFERENCE_HEIGHT = 2400
 
 TEMPLATE_SCALE_BASIS = "short_side"
-TEMPLATE_SCALE_STEPS = (0.85, 0.92, 1.0, 1.08, 1.15)
+TEMPLATE_SCALE_STEPS = (0.92, 1.0, 1.08)
 
 SHAPE_THRESHOLD = 0.80
 COLOR_THRESHOLD = 0.80
@@ -258,7 +258,7 @@ QUENTES_TTL = 30.0
 
 CATEGORY_THRESHOLDS = {
     "build": 0.95,
-    "new_point": 0.97,
+    "new_point": 0.95,
     "food": 0.90,
     "upgrade": 0.95,
     "up_food": 0.90,
@@ -309,7 +309,7 @@ NMS_IOU = 0.35
 
 # ==== ACTIONS ====
 
-UPGRADE_ITEM_CLICKS = 5
+UPGRADE_ITEM_CLICKS = 10
 UPGRADE_FOOD_PRESS = 4.0
 
 DISMISS_POINT = (10, 2200)
@@ -349,8 +349,8 @@ GRAY_SUPPRESS_UPDATES = 40
 # for N updates without resolving is a paid offer (e.g. starter
 # pack), not free loot — suppress open_box so the bot backs off
 # instead of tapping inside the paywall, then tries again later.
-BOX_STUCK_UPDATES = 25
-BOX_SUPPRESS_UPDATES = 40
+BOX_STUCK_UPDATES = 100
+BOX_SUPPRESS_UPDATES = 20
 
 SCROLL_BOTTOM_DIRECTION = "up"
 SCROLL_BOTTOM_SWIPES = 6

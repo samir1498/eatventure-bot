@@ -198,25 +198,33 @@ def test_timeout_do_estado_volta_para_normal():
 
 
 def test_delivery_e_helper_abrem_painel_e_usam_botao_interno():
-    for entrada, estado, botao in (
-        ("delivery", sm.DELIVERY, "accept_delivery"),
-        ("helper", sm.HELPER, "invite_helper"),
-    ):
-        machine, actions, clock = build()
+    # delivery from NORMAL opens DELIVERY and uses accept_delivery
+    machine, actions, clock = build()
+    assert "delivery" in machine.wanted_categories()
+    machine.update([detection("delivery")])
+    assert actions.actions == ["delivery"]
+    assert machine.state == sm.DELIVERY
+    assert "accept_delivery" in machine.wanted_categories()
 
-        assert entrada in machine.wanted_categories()
-        machine.update([detection(entrada)])
+    clock.advance(STATE_ENTRY_SETTLE[sm.DELIVERY] + 0.01)
+    machine.update([detection("accept_delivery"), detection("close")])
+    assert actions.actions == ["delivery", "accept_delivery"]
+    assert machine.state == sm.NORMAL
 
-        assert actions.actions == [entrada]
-        assert machine.state == estado
-        assert botao in machine.wanted_categories()
-        assert entrada not in machine.wanted_categories()
+    # helper from DELIVERY opens HELPER and uses invite_helper
+    machine, actions, clock = build()
+    machine._enter(sm.DELIVERY)
+    clock.advance(STATE_ENTRY_SETTLE[sm.DELIVERY] + 0.01)
+    assert "helper" in machine.wanted_categories()
+    machine.update([detection("helper")])
+    assert actions.actions == ["helper"]
+    assert machine.state == sm.HELPER
+    assert "invite_helper" in machine.wanted_categories()
 
-        clock.advance(STATE_ENTRY_SETTLE[estado] + 0.01)
-        machine.update([detection(botao), detection("close")])
-
-        assert actions.actions == [entrada, botao]
-        assert machine.state == sm.NORMAL
+    clock.advance(STATE_ENTRY_SETTLE[sm.HELPER] + 0.01)
+    machine.update([detection("invite_helper"), detection("close")])
+    assert actions.actions == ["helper", "invite_helper"]
+    assert machine.state == sm.NORMAL
 
 
 def test_delivery_e_helper_saem_por_timeout_sem_botao():

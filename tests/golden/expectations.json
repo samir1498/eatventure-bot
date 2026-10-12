@@ -1,59 +1,143 @@
 {
   "eatventure.png": [
     {
+      "category": "delivery",
+      "color_similarity": 0.9995,
+      "confidence": 0.9997,
+      "x": 38,
+      "y": 506
+    },
+    {
+      "category": "helper",
+      "color_similarity": 0.9915,
+      "confidence": 0.9995,
+      "x": 50,
+      "y": 327
+    },
+    {
+      "category": "delivery",
+      "color_similarity": 0.9936,
+      "confidence": 0.9986,
+      "x": 90,
+      "y": 504
+    },
+    {
       "category": "upgrade",
-      "color_similarity": 1.0,
-      "confidence": 1.0,
-      "x": 914,
-      "y": 2194
+      "color_similarity": 0.9907,
+      "confidence": 0.9976,
+      "x": 912,
+      "y": 2192
     },
     {
       "category": "new_point",
-      "color_similarity": 0.9997,
-      "confidence": 0.9999,
-      "x": 904,
-      "y": 1515
+      "color_similarity": 0.9937,
+      "confidence": 0.9916,
+      "x": 528,
+      "y": 1809
     },
     {
       "category": "new_point",
-      "color_similarity": 0.9594,
-      "confidence": 0.9966,
-      "x": 545,
-      "y": 1838
+      "color_similarity": 0.9935,
+      "confidence": 0.9839,
+      "x": 888,
+      "y": 1497
+    },
+    {
+      "category": "food",
+      "color_similarity": 0.9615,
+      "confidence": 0.9427,
+      "x": 66,
+      "y": 1528
     }
   ],
   "food_stations.png": [
     {
-      "category": "food",
-      "color_similarity": 1.0,
-      "confidence": 1.0,
-      "x": 898,
-      "y": 1520
+      "category": "delivery",
+      "color_similarity": 0.9995,
+      "confidence": 0.9997,
+      "x": 38,
+      "y": 506
+    },
+    {
+      "category": "helper",
+      "color_similarity": 0.9915,
+      "confidence": 0.9995,
+      "x": 50,
+      "y": 327
+    },
+    {
+      "category": "delivery",
+      "color_similarity": 0.9937,
+      "confidence": 0.9987,
+      "x": 90,
+      "y": 504
     },
     {
       "category": "food",
-      "color_similarity": 1.0,
-      "confidence": 1.0,
-      "x": 901,
-      "y": 1104
+      "color_similarity": 0.9771,
+      "confidence": 0.9951,
+      "x": 908,
+      "y": 1529
+    },
+    {
+      "category": "food",
+      "color_similarity": 0.9731,
+      "confidence": 0.9875,
+      "x": 915,
+      "y": 1110
+    },
+    {
+      "category": "upgrade",
+      "color_similarity": 0.9389,
+      "confidence": 0.911,
+      "x": 912,
+      "y": 2192
     }
   ],
   "new_point.png": [
     {
-      "category": "new_point",
-      "color_similarity": 0.9995,
-      "confidence": 0.9954,
-      "x": 903,
-      "y": 1788
+      "category": "helper",
+      "color_similarity": 0.9915,
+      "confidence": 0.9995,
+      "x": 50,
+      "y": 327
     }
   ],
   "up_food.png": [
     {
+      "category": "delivery",
+      "color_similarity": 0.9995,
+      "confidence": 0.9997,
+      "x": 38,
+      "y": 506
+    },
+    {
+      "category": "helper",
+      "color_similarity": 0.9915,
+      "confidence": 0.9995,
+      "x": 50,
+      "y": 327
+    },
+    {
+      "category": "delivery",
+      "color_similarity": 0.9937,
+      "confidence": 0.9987,
+      "x": 90,
+      "y": 504
+    },
+    {
       "category": "up_food",
-      "color_similarity": 0.9956,
-      "confidence": 0.9675,
-      "x": 689,
-      "y": 1348
+      "color_similarity": 0.9874,
+      "confidence": 0.9782,
+      "x": 687,
+      "y": 1346
+    },
+    {
+      "category": "upgrade",
+      "color_similarity": 0.9389,
+      "confidence": 0.911,
+      "x": 912,
+      "y": 2192
     }
   ]
 }

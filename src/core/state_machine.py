@@ -78,8 +78,8 @@ NORMAL_RULES = [
 
     ("plane", "plane", RENOVATE),
     ("build", "click", RENOVATE),
-    ("delivery", "delivery", DELIVERY),
     ("upgrade", "upgrade", UPGRADE),
+    ("delivery", "delivery", DELIVERY),
     ("new_point", "new_point", NEW_POINT),
     ("food", "food", FOOD),
 ]
@@ -126,6 +126,8 @@ STATE_RULES = {
     ],
     NEW_POINT: [
         ("up_food", "new_point_click", None),
+        ("gray_max", "gray_max", None),
+        ("gray_coin", "gray_coin", None),
     ],
 }
 
@@ -1050,6 +1052,20 @@ class StateMachine:
                 self.up_food_wait_start = time.monotonic()
 
             return
+
+        # Unaffordable new point: dismiss immediately
+        for categoria, acao in (
+            ("gray_max", "gray_max"),
+            ("gray_coin", "gray_coin"),
+        ):
+
+            deteccao = self._find(detections, categoria)
+
+            if deteccao is not None:
+
+                self._act(acao, deteccao, NORMAL)
+
+                return
 
         self._wait_or_give_up()
 
