@@ -15,7 +15,7 @@ _EXE_SUFFIX = ".exe" if _IS_WINDOWS else ""
 # ==== DEVICE ====
 
 # None = detect at runtime; pin it to avoid repeated prompts when connected via USB+WiFi simultaneously.
-DEVICE_SERIAL = None
+DEVICE_SERIAL = os.environ.get("DEVICE_SERIAL")
 
 
 # ==== GAME ====

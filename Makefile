@@ -17,7 +17,7 @@ install: ## create venv + install dependencies
 	$(VENV)/bin/pip install -r $(PROJ)/requirements.txt
 
 run: ## start the bot (uses DEVICE env or default emulator-5554)
-	cd $(PROJ) && DEVICE_SERIAL=$(DEVICE) $(PY) src/main.py
+	cd $(PROJ) && $(PY) src/main.py --device $(DEVICE)
 
 test: ## run all tests
 	cd $(PROJ) && $(PY) tests/test_detection.py && $(PY) tests/test_state_machine.py && $(PY) tests/test_pipeline.py
