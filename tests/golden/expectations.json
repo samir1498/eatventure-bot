@@ -85,13 +85,6 @@
       "confidence": 0.9875,
       "x": 915,
       "y": 1110
-    },
-    {
-      "category": "upgrade",
-      "color_similarity": 0.9389,
-      "confidence": 0.911,
-      "x": 912,
-      "y": 2192
     }
   ],
   "new_point.png": [
@@ -131,13 +124,6 @@
       "confidence": 0.9782,
       "x": 687,
       "y": 1346
-    },
-    {
-      "category": "upgrade",
-      "color_similarity": 0.9389,
-      "confidence": 0.911,
-      "x": 912,
-      "y": 2192
     }
   ]
 }

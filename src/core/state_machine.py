@@ -1194,9 +1194,9 @@ class StateMachine:
         if not SWIPE_WAIT_FOR_NO_ACTION:
             return
 
-        self.explore_anchor = time.monotonic()
-
-        self.explore_found = True
+        if not self.explore_found:
+            self.explore_anchor = time.monotonic()
+            self.explore_found = True
 
     def exploration_interval(self):
         """How long to wait for the next swipe: exploration_delay when nothing was found, exploration_action_delay (longer) when it was — derived from explore_found instead of stored."""
@@ -1215,10 +1215,10 @@ class StateMachine:
             now - self.explore_anchor
             < self.exploration_interval()
         ):
-            return
+            return False
 
         if not self._can_act():
-            return
+            return False
 
         logger.info(
             "explore: swipe %s %d/%d",
@@ -1230,7 +1230,7 @@ class StateMachine:
         if not self.action_manager.swipe(
             self.swipe_direction
         ):
-            return
+            return False
 
         self.last_action_time = now
 
@@ -1269,3 +1269,5 @@ class StateMachine:
             )
 
             self.swipe_count = 0
+
+        return True
