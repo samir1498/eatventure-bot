@@ -442,6 +442,15 @@ UPGRADE_IGNORE_SECONDS = 60.0
 # is what made the bot click the same dish like crazy.
 RED_ARROW_GATE_MARGIN = 100
 
+# Badge-only fallback: red_arrow visible but its station is not
+# detected (occlusion, e.g. pet standing over the plot; empty dashed
+# plots read as nothing). Taps the badge center as a station proxy
+# through the normal food/new_point actions, so the give-up timer and
+# FOOD_MAX_ATTEMPTS ignore still guard loops. Food proxies fire
+# first; a badge food gave up on is retried as new_point.
+RED_ARROW_FALLBACK_ENABLED = True
+RED_ARROW_FALLBACK_CATEGORIES = ("food", "new_point")
+
 
 # ==== CITY-STUCK RECOVERY ====
 

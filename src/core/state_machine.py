@@ -27,6 +27,8 @@ from core.config import (
     MAX_DETECTION_AGE,
     MAX_SWIPES,
     PROGRESS_ACTIONS,
+    RED_ARROW_FALLBACK_CATEGORIES,
+    RED_ARROW_FALLBACK_ENABLED,
     RED_ARROW_GATE_MARGIN,
     REPEATED_ACTION_WARNING,
     STATE_ENTRY_SETTLE,
@@ -212,9 +214,10 @@ class StateMachine:
         # Wait after the food long press.
         self.up_food_wait_start = None
 
-        # Current "food" item, waiting for up_food. Stored here (and
-        # not only in the local detection) because _wait_or_give_up needs
-        # it to know WHICH item to ignore when giving up.
+        # Current panel target ("food" dish or "new_point" slot),
+        # waiting for up_food. Stored here (and not only in the local
+        # detection) because _wait_or_give_up needs it to know WHICH
+        # item to ignore when giving up.
         self._food_target = None
 
         # "food" items that exhausted UP_FOOD_WAIT in
@@ -223,10 +226,19 @@ class StateMachine:
         # forever (finding it keeps postponing the swipe).
         self._ignored_food = []
 
+        # Same for "new_point" slots (a blocked plot the bot tapped
+        # through a badge proxy without ever unlocking). Tracked
+        # apart from food: a badge food gave up on is retried as
+        # new_point, and vice versa must not double-count.
+        self._ignored_new_point = []
+
         # Last give-up (item + how many times in a row), to know
         # whether the NEXT one is on the same item or a restart.
         self._food_fail_target = None
         self._food_fail_count = 0
+
+        self._new_point_fail_target = None
+        self._new_point_fail_count = 0
 
         # Counted from start, not from the first build: the first
         # stretch is information too.
@@ -608,13 +620,43 @@ class StateMachine:
             detection = self._find(detections, category)
 
             if detection is None:
-                continue
+
+                # Orphan-badge fallback: the upgrade badge shows but
+                # its station does not (panda over the plot, empty
+                # dashed outline) — tap the badge center as a proxy
+                # instead of stalling. Food keeps priority: a
+                # new_point proxy never steals a badge the food row
+                # would claim, and fires once food gave up on it.
+                if (
+                    category in RED_ARROW_FALLBACK_CATEGORIES
+                    and self.state == NORMAL
+                    and not (
+                        category == "new_point"
+                        and self._find_fallback_proxy(
+                            detections,
+                            "food",
+                        )
+                        is not None
+                    )
+                ):
+
+                    detection = self._find_fallback_proxy(
+                        detections,
+                        category,
+                    )
+
+                if detection is None:
+                    continue
 
             # Red-badge preference: dishes WITH a red upgrade badge are
             # upgradeable — prefer them, but fall back to any visible
             # dish when no badge is detected (badge templates miss on
             # some views; a strict gate blinded the bot entirely).
-            if category == "food" and self.state == NORMAL:
+            if (
+                category == "food"
+                and self.state == NORMAL
+                and not detection.get("fallback")
+            ):
 
                 badged = self._find_badged_food(detections)
 
@@ -760,6 +802,15 @@ class StateMachine:
         if action == "food":
             self._food_target = detection
             self.up_food_wait_start = time.monotonic()
+
+        # Panel target only: the timer arms lazily on the first
+        # NEW_POINT frame (panel-open grace), see _new_point —
+        # except badge-fallback taps, which never open a panel
+        # (same city view), so they arm at tap time like food.
+        if action == "new_point":
+            self._food_target = detection
+            if detection is not None and detection.get("fallback"):
+                self.up_food_wait_start = time.monotonic()
 
         return True
 
@@ -1122,9 +1173,14 @@ class StateMachine:
         # the dish would be tapped again on the next NORMAL pass —
         # the "FOOD stuck" infinite loop. Registering here feeds the
         # FOOD_MAX_ATTEMPTS ignore instead.
-        if self.state == FOOD and self._food_target is not None:
+        if self._food_target is not None:
 
-            self._register_food_failure(self._food_target)
+            if self.state == FOOD:
+                self._register_food_failure(self._food_target)
+
+            elif self.state == NEW_POINT:
+                self._register_new_point_failure(self._food_target)
+
             self._food_target = None
 
         self._enter(NORMAL)
@@ -1169,6 +1225,11 @@ class StateMachine:
 
     def _new_point(self, detections):
         """Same as FOOD, but a single click releases it — not a long press."""
+
+        # Entry grace: the panel opens after the tap, so the give-up
+        # clock starts on the first panel frame, not on the tap.
+        if self.up_food_wait_start is None:
+            self.up_food_wait_start = time.monotonic()
 
         unlock_food = self._find(detections, "up_food")
 
@@ -1229,9 +1290,14 @@ class StateMachine:
             UP_FOOD_WAIT,
         )
 
-        if self.state == FOOD and self._food_target is not None:
+        if self._food_target is not None:
 
-            self._register_food_failure(self._food_target)
+            if self.state == FOOD:
+                self._register_food_failure(self._food_target)
+
+            elif self.state == NEW_POINT:
+                self._register_new_point_failure(self._food_target)
+
             self._food_target = None
 
         self._enter(NORMAL)
@@ -1265,13 +1331,48 @@ class StateMachine:
         self._food_fail_target = None
         self._food_fail_count = 0
 
+    def _register_new_point_failure(self, target):
+        """Same consecutive-give-up counting as food, on its own
+        counter and ignore list — a badge that failed as food gets a
+        full new_point chance, not a shared one."""
+
+        if (
+            self._new_point_fail_target is not None
+            and self._iou(target, self._new_point_fail_target)
+            >= FOOD_IGNORE_IOU
+        ):
+            self._new_point_fail_count += 1
+
+        else:
+            self._new_point_fail_count = 1
+
+        self._new_point_fail_target = target
+
+        if self._new_point_fail_count < FOOD_MAX_ATTEMPTS:
+            return
+
+        logger.warning(
+            "'new_point' without up_food in %d consecutive attempts — "
+            "ignoring until the next swipe",
+            FOOD_MAX_ATTEMPTS,
+        )
+
+        self._ignored_new_point.append((target, time.monotonic()))
+
+        self._new_point_fail_target = None
+        self._new_point_fail_count = 0
+
     def _reset_food_tracking(self):
         """Forgets ignored items and the attempt count — called on every real swipe, which changes what is on screen."""
 
         self._ignored_food = []
+        self._ignored_new_point = []
 
         self._food_fail_target = None
         self._food_fail_count = 0
+
+        self._new_point_fail_target = None
+        self._new_point_fail_count = 0
 
     def _find(self, detections, category):
         """First detection of the category. No threshold refiltering here on purpose: a second threshold once lived in this method, diverging from the detector's, and the winner was the first in filename alphabetical order, not the best."""
@@ -1282,6 +1383,11 @@ class StateMachine:
                 continue
 
             if category == "food" and self._is_ignored_food(
+                detection
+            ):
+                continue
+
+            if category == "new_point" and self._is_ignored_new_point(
                 detection
             ):
                 continue
@@ -1302,6 +1408,26 @@ class StateMachine:
         ]
 
         self._ignored_food = alive
+
+        return any(
+            self._iou(detection, ignored) >= FOOD_IGNORE_IOU
+            for ignored, _ in alive
+        )
+
+    def _is_ignored_new_point(self, detection):
+        """Same slot as a 'new_point' that already exhausted UP_FOOD_WAIT
+        without up_food. Separate list from food: a badge food gave up
+        on is retried as new_point."""
+
+        now = time.monotonic()
+
+        alive = [
+            (ignored, ignored_at)
+            for ignored, ignored_at in self._ignored_new_point
+            if now - ignored_at < FOOD_IGNORE_TTL
+        ]
+
+        self._ignored_new_point = alive
 
         return any(
             self._iou(detection, ignored) >= FOOD_IGNORE_IOU
@@ -1388,6 +1514,58 @@ class StateMachine:
             <= center_y
             <= food["y"] + food["height"] + margin
         )
+
+    def _find_fallback_proxy(self, detections, category):
+        """Badge-as-station proxy: red_arrow with no matching station.
+
+        Returns a synthetic detection of `category` on the badge box,
+        so the normal action (and its give-up/ignore guard) applies
+        unchanged. Skips badges already ignored for that action."""
+
+        if not RED_ARROW_FALLBACK_ENABLED:
+            return None
+
+        if category not in RED_ARROW_FALLBACK_CATEGORIES:
+            return None
+
+        if not detections:
+            return None
+
+        ignorada = (
+            self._is_ignored_new_point
+            if category == "new_point"
+            else self._is_ignored_food
+        )
+
+        for badge in detections:
+
+            if badge.get("category") != "red_arrow":
+                continue
+
+            proxy = self._badge_proxy(badge, category)
+
+            if ignorada(proxy):
+                continue
+
+            return proxy
+
+        return None
+
+    @staticmethod
+    def _badge_proxy(badge, category):
+        """Synthetic station detection centered on the badge."""
+
+        return {
+            "category": category,
+            "name": "red_arrow_fallback",
+            "confidence": badge.get("confidence", 0.0),
+            "color_similarity": badge.get("color_similarity", 0.0),
+            "x": badge["x"],
+            "y": badge["y"],
+            "width": badge["width"],
+            "height": badge["height"],
+            "fallback": "red_arrow",
+        }
 
     def _city_stuck_check(self):
         """Recovery ladder for a city going nowhere (shikhar-style escalation): 10 min without progress forces a full sweep; 15 min force-stops + relaunches the game. Only runs in NORMAL — inside a panel we are mid-task, not stuck."""

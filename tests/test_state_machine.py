@@ -508,6 +508,160 @@ def test_food_sem_badge_ainda_toca_mas_desiste_e_ignora():
     assert [a for a in actions.actions if a == "food"] == taps
 
 
+def test_red_arrow_fallback_taps_badge_when_food_missing():
+    """Badge with no dish (occlusion, e.g. pet over it): taps the
+    badge center as a dish proxy, arms the give-up timer, and after
+    FOOD_MAX_ATTEMPTS the badge is ignored instead of tapped forever."""
+
+    machine, actions, clock = build()
+
+    machine.action_settle = 0.0
+    machine.action_cooldown = 0.0
+
+    badge = detection("red_arrow", x=300, y=400)
+
+    machine.update([badge])
+    assert machine.state == sm.FOOD, machine.state
+    assert actions.actions == ["food"], actions.actions
+    assert machine._food_target is not None
+    assert machine._food_target.get("fallback") == "red_arrow"
+    assert (machine._food_target["x"], machine._food_target["y"]) == (300, 400)
+
+    clock.advance(sm.UP_FOOD_WAIT + 0.1)
+    machine.update([])
+    assert machine.state == sm.NORMAL, machine.state
+
+    for _ in range(2):
+        machine.update([badge])
+        assert machine.state == sm.FOOD, machine.state
+        clock.advance(sm.UP_FOOD_WAIT + 0.1)
+        machine.update([])
+
+    taps = [a for a in actions.actions if a == "food"]
+    assert len(taps) == 3, actions.actions
+
+    # Food gave up on the badge: the new_point row now claims it
+    # (plot-unlock handoff), so no 4th food tap happens.
+    machine.update([badge])
+    assert machine.state == sm.NEW_POINT, machine.state
+    assert len([a for a in actions.actions if a == "food"]) == 3
+
+
+def test_red_arrow_fallback_skipped_when_food_present():
+    """Real dish wins over the badge proxy: no synthetic detection."""
+
+    machine, actions, _ = build()
+
+    machine.update([detection("food"), detection("red_arrow")])
+
+    assert actions.actions == ["food"], actions.actions
+    assert machine._food_target.get("fallback") is None
+
+
+def test_red_arrow_fallback_disabled_taps_nothing():
+    """Flag off: badge alone fires no food tap."""
+
+    machine, actions, _ = build()
+
+    previous = sm.RED_ARROW_FALLBACK_ENABLED
+    sm.RED_ARROW_FALLBACK_ENABLED = False
+
+    try:
+        machine.update([detection("red_arrow")])
+    finally:
+        sm.RED_ARROW_FALLBACK_ENABLED = previous
+
+    assert actions.actions == [], actions.actions
+    assert machine.state == sm.NORMAL, machine.state
+
+
+def test_red_arrow_fallback_retries_ignored_food_as_new_point():
+    """Badge food gave up on (3 fails): the new_point row claims it
+    as a station proxy instead of stalling on the blocked plot."""
+
+    machine, actions, clock = build()
+
+    machine.action_settle = 0.0
+    machine.action_cooldown = 0.0
+
+    badge = detection("red_arrow", x=300, y=400)
+
+    for _ in range(3):
+        machine.update([badge])
+        assert machine.state == sm.FOOD, machine.state
+        clock.advance(sm.UP_FOOD_WAIT + 0.1)
+        machine.update([])
+        assert machine.state == sm.NORMAL, machine.state
+
+    assert len([a for a in actions.actions if a == "food"]) == 3
+
+    machine.update([badge])
+
+    assert actions.actions[-1] == "new_point", actions.actions
+    assert machine.state == sm.NEW_POINT, machine.state
+    assert machine._food_target["category"] == "new_point"
+    assert machine._food_target.get("fallback") == "red_arrow"
+
+
+def test_red_arrow_fallback_new_point_ignores_after_failures():
+    """Badge that fails as new_point too is ignored after
+    FOOD_MAX_ATTEMPTS instead of tapped forever."""
+
+    machine, actions, clock = build()
+
+    machine.action_settle = 0.0
+    machine.action_cooldown = 0.0
+
+    badge = detection("red_arrow", x=300, y=400)
+
+    for _ in range(3):
+        machine.update([badge])
+        clock.advance(sm.UP_FOOD_WAIT + 0.1)
+        machine.update([])
+
+    # Fallback taps arm the give-up timer at tap time, so one
+    # empty window per cycle is enough (same as food).
+    for _ in range(3):
+        machine.update([badge])
+        assert machine.state == sm.NEW_POINT, machine.state
+        clock.advance(sm.UP_FOOD_WAIT + 0.1)
+        machine.update([])
+        assert machine.state == sm.NORMAL, machine.state
+
+    taps = [a for a in actions.actions if a == "new_point"]
+    assert len(taps) == 3, actions.actions
+
+    machine.update([badge])
+
+    assert machine.state == sm.NORMAL, machine.state
+    assert len([a for a in actions.actions if a == "new_point"]) == 3
+
+
+def test_real_new_point_wins_over_fallback():
+    """Visible slot beats the badge proxy: no synthetic detection."""
+
+    machine, actions, _ = build()
+
+    machine.update([detection("new_point"), detection("red_arrow")])
+
+    assert actions.actions == ["new_point"], actions.actions
+    assert machine._food_target.get("fallback") is None
+
+
+def test_find_skips_ignored_new_point():
+    """An ignored slot is not returned even when directly visible."""
+
+    machine, _, clock = build()
+
+    slot = detection("new_point", x=500, y=600)
+
+    assert machine._find([slot], "new_point") is slot
+
+    machine._ignored_new_point.append((slot, clock.now))
+
+    assert machine._find([slot], "new_point") is None
+
+
 def test_upgrade_vazio_tres_vezes_ignora_botao():
     """Empty Upgrades panel ("You have all upgrades!") 3 visits in a
     row: the button is permanent nav chrome, so reopening it is pure
