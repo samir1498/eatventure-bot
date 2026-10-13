@@ -379,7 +379,7 @@ MAX_DETECTION_AGE = 10.0
 # panel), but the button is permanent chrome that matches on every
 # frame. Letting it stop the pass hid `delivery`, `new_point` and
 # `food` behind it, so the bot saw one detection and swiped forever.
-CATEGORY_NO_PRIORITY_STOP = {"red_arrow", "upgrade"}
+CATEGORY_NO_PRIORITY_STOP = {"red_arrow", "upgrade", "delivery"}
 
 
 # ==== TIMING ====

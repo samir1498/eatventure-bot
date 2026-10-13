@@ -939,12 +939,6 @@ class Detector:
                 }
             )
 
-        if (
-            self._is_reference(frame_width, frame_height)
-            and not extras
-        ):
-            return self.by_category
-
         default_categorias = (
             self._defaults_for(frame_width, frame_height)
             if self.use_defaults
