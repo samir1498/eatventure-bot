@@ -2,7 +2,7 @@
 
 ## Comunicação
 
-- Responda em português, de forma direta e concisa.
+- Respond in English, directly and concisely.
 - Em tarefas simples, informe o resultado sem introduções ou conclusões genéricas. Explique decisões ou código quando isso for necessário para entender a mudança ou quando eu pedir.
 - Escreva apenas o código necessário. Use nomes claros; comentários e docstrings devem explicar somente motivos não óbvios, sem repetir o código.
 

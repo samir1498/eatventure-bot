@@ -260,7 +260,8 @@ CATEGORY_THRESHOLDS = {
     "build": 0.95,
     "new_point": 0.95,
     "food": 0.90,
-    "upgrade": 0.95,
+    "red_arrow": 0.90,
+    "upgrade": 0.90,
     "up_food": 0.90,
     "up_upgrade": 0.90,
     "close": 0.85,
@@ -368,6 +369,18 @@ VISION_FILTER_BY_STATE = True
 VISION_PRIORITY_STOP = True
 MAX_DETECTION_AGE = 10.0
 
+# Categories that never TRIGGER the priority stop: searched even
+# after a higher-priority category matched, and matching them does
+# not stop the pass either. For gating-only categories (no rule row
+# ever fires them): stopping at one would hide the actionable
+# categories below it, and stopping before one would blind the gate.
+#
+# `upgrade` is different: it HAS a rule row (it opens the Upgrades
+# panel), but the button is permanent chrome that matches on every
+# frame. Letting it stop the pass hid `delivery`, `new_point` and
+# `food` behind it, so the bot saw one detection and swiped forever.
+CATEGORY_NO_PRIORITY_STOP = {"red_arrow", "upgrade"}
+
 
 # ==== TIMING ====
 
@@ -391,6 +404,65 @@ SWIPE_START_DIRECTION = "down"
 UP_FOOD_WAIT = 2.0
 FOOD_IGNORE_IOU = 0.5
 FOOD_MAX_ATTEMPTS = 3
+
+# Ignored dishes get a second chance after this long even with no
+# swipe: a bot kept busy by other chrome postpones exploration
+# forever, and swipe-only expiry would blind it to the dish
+# permanently.
+FOOD_IGNORE_TTL = 300.0
+
+
+# ==== UPGRADE ====
+
+# Consecutive UPGRADE visits with zero upgrade_item taps before the
+# `upgrade` button is ignored: the panel was empty ("You have all
+# upgrades!") and the button is permanent nav chrome — without this
+# the bot reopens the empty panel forever.
+#
+# Trip FAST. One visit cycle is ~2.8s (open panel, no buy, close), so
+# every extra visit before the trip is ~3s of the bot opening an empty
+# panel instead of unlocking stations. 8 visits cost 26s of startup.
+# 3 is the minimum that can be called "conclusively empty".
+UPGRADE_EMPTY_VISITS = 3
+
+# How long the button stays ignored. Cleared early by a renovation
+# door (new city = new general upgrades to buy).
+#
+# Short on purpose: while ignored, `upgrade` is dropped from the
+# detector request (see wanted_categories), so the window costs one
+# panel open and buys back a full sweep of real work. 60s = one
+# re-check per minute, which is not spam; 1800s = half an hour of
+# missing a newly affordable global upgrade.
+UPGRADE_IGNORE_SECONDS = 60.0
+
+# Red-arrow badge gate: a "food" detection in NORMAL only becomes a
+# tap when a "red_arrow" badge overlaps it (badge center inside the
+# dish box inflated by this margin, px at reference resolution).
+# Without the badge the dish is not upgradeable — tapping it anyway
+# is what made the bot click the same dish like crazy.
+RED_ARROW_GATE_MARGIN = 100
+
+
+# ==== CITY-STUCK RECOVERY ====
+
+# Actions that prove the city is moving forward (money spent or a
+# new item unlocked). Anything else (taps, dismisses, swipes) does
+# not reset the stuck clock.
+PROGRESS_ACTIONS = {
+    "upgrade_food",
+    "upgrade_item",
+    "new_point_click",
+    "renovate_click",
+}
+
+# No progress for this long in NORMAL: force a full sweep (clears
+# ignored dishes, resets the exploration anchor so the next update
+# swipes immediately).
+CITY_STUCK_SWEEP_AFTER = 600.0
+
+# Still nothing after this long: force-stop + relaunch the game
+# (bigger hammer, same idea as shikhar's stale restart).
+CITY_STUCK_RESTART_AFTER = 900.0
 
 
 # ==== STATE MACHINE ====

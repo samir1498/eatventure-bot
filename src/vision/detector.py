@@ -38,6 +38,7 @@ from core.config import (
     TEMPLATE_SCALE_BASIS,
     TEMPLATE_SCALE_STEPS,
     VISION_PRIORITY_STOP,
+    CATEGORY_NO_PRIORITY_STOP,
     COARSE_SCALE_MIN,
     COARSE_SCALE_STEP,
     REFERENCE_HEIGHT,
@@ -1930,7 +1931,14 @@ class Detector:
 
             self._sonda[chave_categoria] = sonda + 1
 
-            if achou and parar_na_prioridade:
+            # Gating-only categories (red_arrow) neither trigger the
+            # stop nor are skipped by it: the gate needs them ALONGSIDE
+            # the actionable categories, whichever matches first.
+            if (
+                achou
+                and parar_na_prioridade
+                and category not in CATEGORY_NO_PRIORITY_STOP
+            ):
                 break
 
         # Several templates of the same category hit the same icon — without

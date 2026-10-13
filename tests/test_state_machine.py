@@ -29,6 +29,8 @@ from core.config import (                         # noqa: E402
     SWIPE_WAITING_TIME,
     UPGRADE_FOOD_STUCK_UPDATES,
     UPGRADE_FOOD_SUPPRESS_UPDATES,
+    UPGRADE_EMPTY_VISITS,
+    UPGRADE_IGNORE_SECONDS,
     UP_FOOD_WAIT,
 )
 from core import state_machine as sm              # noqa: E402
@@ -428,6 +430,203 @@ def test_food_desiste_depois_da_espera():
     assert machine.state == sm.NORMAL, machine.state
 
 
+def test_food_nao_desiste_no_meio_do_press():
+    """Regression for the overnight stall: UPGRADE_FOOD_PRESS (4s) >
+    UP_FOOD_WAIT (2s). The async worker runs the press on its own
+    thread, so without a busy guard _wait_or_give_up fired 2s into
+    the 4s press and bailed to NORMAL mid-upgrade."""
+
+    machine, actions, clock = build()
+
+    machine._enter(sm.FOOD)
+
+    machine.update([detection("up_food")])
+
+    assert actions.actions == ["upgrade_food"], actions.actions
+
+    # Worker still holding the 4s press: the wait clock freezes.
+    # (Advance past UP_FOOD_WAIT but under the FOOD state timeout,
+    # so only _wait_or_give_up is under test — not _timed_out.)
+    actions.busy = True
+    clock.advance(UP_FOOD_WAIT + 0.5)
+
+    machine.update([])
+
+    assert machine.state == sm.FOOD, machine.state
+
+    # Press finished, still no next up_food: now it may give up.
+    actions.busy = False
+    clock.advance(UP_FOOD_WAIT + 0.1)
+
+    machine.update([])
+
+    assert machine.state == sm.NORMAL, machine.state
+
+
+def test_food_sem_badge_ainda_toca_mas_desiste_e_ignora():
+    """Prefer-with-fallback badge gate: food WITHOUT a badge is still
+    tapped (badge templates miss on some views — a strict gate blinded
+    the bot entirely). The tap MUST arm the give-up timer on entry and
+    the timeout path MUST register a failure, so after
+    FOOD_MAX_ATTEMPTS the dish is ignored instead of tapped forever
+    (the "FOOD stuck" infinite loop)."""
+
+    machine, actions, clock = build()
+
+    machine.action_settle = 0.0
+    machine.action_cooldown = 0.0
+
+    dish = detection("food")
+
+    # 1. Entry taps the dish AND arms the give-up timer.
+    machine.update([dish])
+    assert machine.state == sm.FOOD, machine.state
+    assert machine.up_food_wait_start is not None
+    assert "food" in actions.actions, actions.actions
+
+    # 2. up_food never shows up: give-up fires UP_FOOD_WAIT after the
+    # tap (not the 5s state timeout) and counts the first failure.
+    clock.advance(sm.UP_FOOD_WAIT + 0.1)
+    machine.update([])
+    assert machine.state == sm.NORMAL, machine.state
+    assert machine._food_fail_count == 1, machine._food_fail_count
+
+    # 3. Two more identical cycles -> dish ignored, no 4th tap.
+    for _ in range(2):
+        machine.update([dish])
+        assert machine.state == sm.FOOD, machine.state
+        clock.advance(sm.UP_FOOD_WAIT + 0.1)
+        machine.update([])
+
+    taps = [a for a in actions.actions if a == "food"]
+
+    assert len(taps) == 3, actions.actions
+
+    machine.update([dish])
+
+    assert machine.state == sm.NORMAL, machine.state
+    assert [a for a in actions.actions if a == "food"] == taps
+
+
+def test_upgrade_vazio_tres_vezes_ignora_botao():
+    """Empty Upgrades panel ("You have all upgrades!") 3 visits in a
+    row: the button is permanent nav chrome, so reopening it is pure
+    spam. The 4th sighting is skipped without entering UPGRADE."""
+
+    machine, actions, clock = build()
+
+    machine.action_settle = 0.0
+    machine.action_cooldown = 0.0
+
+    for _ in range(UPGRADE_EMPTY_VISITS):
+        machine.update([detection("upgrade")])
+        assert machine.state == sm.UPGRADE, machine.state
+        # Past the UPGRADE entry settle (real panels animate open;
+        # same-instant frames predate the entry tap anyway).
+        clock.advance(1.1)
+        machine.update([detection("close")])
+        assert machine.state == sm.NORMAL, machine.state
+        clock.advance(0.1)
+
+    assert (
+        actions.actions == ["upgrade", "close"] * UPGRADE_EMPTY_VISITS
+    ), actions.actions
+
+    machine.update([detection("upgrade")])
+
+    assert machine.state == sm.NORMAL, machine.state
+    assert (
+        actions.actions == ["upgrade", "close"] * UPGRADE_EMPTY_VISITS
+    ), actions.actions
+
+
+def test_upgrade_com_item_zera_visitas_vazias():
+    """A visit that actually buys (upgrade_item tap) resets the empty
+    counter: 1 buying visit + 2 empty ones must NOT ignore the button."""
+
+    machine, actions, clock = build()
+
+    machine.action_settle = 0.0
+    machine.action_cooldown = 0.0
+
+    # Buying visit.
+    machine.update([detection("upgrade")])
+    clock.advance(1.1)
+    machine.update([detection("up_upgrade")])
+    assert "upgrade_item" in actions.actions, actions.actions
+    clock.advance(0.1)
+    machine.update([detection("close")])
+    assert machine.state == sm.NORMAL, machine.state
+
+    # Two empty visits: not enough to ignore.
+    for _ in range(UPGRADE_EMPTY_VISITS - 1):
+        clock.advance(0.1)
+        machine.update([detection("upgrade")])
+        assert machine.state == sm.UPGRADE, machine.state
+        clock.advance(1.1)
+        machine.update([detection("close")])
+        assert machine.state == sm.NORMAL, machine.state
+        clock.advance(0.1)
+
+    before = list(actions.actions)
+    machine.update([detection("upgrade")])
+
+    assert machine.state == sm.UPGRADE, machine.state
+    assert actions.actions == before + ["upgrade"], actions.actions
+
+
+def test_upgrade_ignore_expira():
+    """Ignoring is time-boxed: after UPGRADE_IGNORE_SECONDS the button
+    gets another chance (new content may have arrived)."""
+
+    machine, actions, clock = build()
+
+    machine.action_settle = 0.0
+    machine.action_cooldown = 0.0
+
+    for _ in range(UPGRADE_EMPTY_VISITS):
+        machine.update([detection("upgrade")])
+        clock.advance(1.1)
+        machine.update([detection("close")])
+        clock.advance(0.1)
+
+    machine.update([detection("upgrade")])
+    assert machine.state == sm.NORMAL, machine.state
+
+    # Time-box expired (set directly: advancing the clock 30 min
+    # would trip the city-stuck recovery instead).
+    machine._upgrade_ignored_until = clock.now - 1.0
+    clock.advance(0.1)
+    machine.update([detection("upgrade")])
+
+    assert machine.state == sm.UPGRADE, machine.state
+
+
+def test_cycle_limpa_upgrade_ignore():
+    """Renovation door (new city coming) clears the ignore: a new city
+    means new general upgrades to buy."""
+
+    machine, actions, clock = build()
+
+    machine.action_settle = 0.0
+    machine.action_cooldown = 0.0
+
+    for _ in range(UPGRADE_EMPTY_VISITS):
+        machine.update([detection("upgrade")])
+        clock.advance(1.1)
+        machine.update([detection("close")])
+        clock.advance(0.1)
+
+    machine.update([detection("upgrade")])
+    assert machine.state == sm.NORMAL, machine.state
+
+    machine._mark_cycle("plane")
+
+    clock.advance(0.1)
+    machine.update([detection("upgrade")])
+    assert machine.state == sm.UPGRADE, machine.state
+
+
 def test_food_sem_up_food_nao_adia_a_exploracao():
 
     machine, actions, clock = build()
@@ -436,7 +635,7 @@ def test_food_sem_up_food_nao_adia_a_exploracao():
     machine.action_cooldown = 0.0
     machine.swipe_count = 2
 
-    machine.update([detection("food")])
+    machine.update([detection("food"), detection("red_arrow")])
 
     assert actions.actions == ["food"], actions.actions
     assert machine.state == sm.FOOD, machine.state
@@ -457,14 +656,14 @@ def test_food_novamente_sem_up_food_preserva_ritmo_do_swipe():
     machine.action_cooldown = 0.0
     machine.swipe_count = 2
 
-    machine.update([detection("food")])
+    machine.update([detection("food"), detection("red_arrow")])
     clock.advance(STATE_TIMEOUTS["FOOD"] + 0.1)
     machine.update([])
 
     assert machine.state == sm.NORMAL, machine.state
     assert not machine.explore_found
 
-    machine.update([detection("food")])
+    machine.update([detection("food"), detection("red_arrow")])
 
     assert actions.actions == ["food", "food"], actions.actions
     assert machine.state == sm.FOOD, machine.state
@@ -712,8 +911,14 @@ def test_categorias_vem_na_ordem_da_prioridade():
     categorias = list(machine.wanted_categories())
 
     esperada = [
-        category
-        for category, _, _ in sm.NORMAL_RULES
+        # Badge first: the detector stops at the first matching
+        # category, so anything after `food` would never be searched
+        # on a food screen — and the food gate would block every tap.
+        "red_arrow",
+        *(
+            category
+            for category, _, _ in sm.NORMAL_RULES
+        ),
     ]
 
     assert categorias == esperada, categorias
@@ -722,8 +927,14 @@ def test_categorias_vem_na_ordem_da_prioridade():
     # searched twice in the same pass.
     assert len(categorias) == len(set(categorias)), categorias
 
-    # And `food` stays last, where the savings live.
-    assert categorias[-1] == "food", categorias
+    # And the gray pair sits dead last: dimmed price chips are main-view
+    # chrome a tap never resolves, so above the real actions they would
+    # starve the city — while `up_food` stays last of the ACTIONABLE
+    # categories (its template also matches the main-view cost button,
+    # so at high priority it would hijack NORMAL).
+    assert categorias[-2:] == ["gray_max", "gray_coin"], categorias
+    assert categorias[-3] == "up_food", categorias
+    assert categorias[-4] == "food", categorias
 
 
 def test_estado_nao_vaza_variavel():
@@ -744,11 +955,9 @@ def test_estado_nao_vaza_variavel():
 
 def test_up_food_em_normal_evolui_a_comida():
     """
-    up_food in NORMAL does the evolve long press, same as FOOD. DELIBERATE
-    CHOICE: not what looks "safe" — it SPENDS COINS on every accidentally
-    opened panel and stalls the bot for UPGRADE_FOOD_PRESS seconds. The
-    alternative (dismiss at a neutral point) is switching to "dismiss" in
-    NORMAL_RULES — an already implemented and tested action.
+    up_food alone in NORMAL still fires the evolve long press (fallback
+    for an accidentally opened panel), but only as LAST resort — any
+    real game action (box/food/...) wins first.
     """
 
     machine, actions, _ = build()
@@ -762,7 +971,7 @@ def test_up_food_em_normal_evolui_a_comida():
 
 
 def test_up_food_faz_o_mesmo_em_normal_e_em_food():
-    """Exists for the day someone "fixes" one side without looking at the other."""
+    """up_food alone fires upgrade_food in both states (fallback parity). With company in NORMAL, real actions win — see test_up_food_vence_acao_de_jogo."""
 
     normal, acoes_normal, _ = build()
 
@@ -793,7 +1002,7 @@ def test_up_food_perde_para_o_close():
 
 
 def test_up_food_vence_acao_de_jogo():
-    """Closing what shouldn't be open comes before any game action."""
+    """Real game actions beat the demoted up_food: the up_food template also matches the main-view cost button, so box/food win in NORMAL (FOOD state still handles the panel)."""
 
     machine, actions, _ = build()
 
@@ -803,7 +1012,7 @@ def test_up_food_vence_acao_de_jogo():
         detection("box"),
     ])
 
-    assert actions.actions == ["upgrade_food"], actions.actions
+    assert actions.actions == ["open_box"], actions.actions
 
 
 def test_acao_repetida_gera_aviso():
@@ -1239,7 +1448,7 @@ def test_swipe_espera_a_vista_parar():
     # tap one — testing before ACTION_SETTLE would prove nothing.
     clock.advance(ACTION_SETTLE + 0.01)
 
-    machine.update([detection("food")], lag=0.0)
+    machine.update([detection("food"), detection("red_arrow")], lag=0.0)
 
     assert machine.action_counts["food"] == 0, (
         "tocou antes de a vista parar — é o clique que cai no "
@@ -1251,7 +1460,7 @@ def test_swipe_espera_a_vista_parar():
 
     assert clock.now > fim_do_swipe + SWIPE_WAITING_TIME
 
-    machine.update([detection("food")], lag=0.0)
+    machine.update([detection("food"), detection("red_arrow")], lag=0.0)
 
     assert machine.action_counts["food"] == 1, (
         machine.action_counts

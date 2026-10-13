@@ -283,6 +283,20 @@ class AndroidActions:
             timeout=timeout,
         ) is not None
 
+    def restart_package(self, package, timeout=15.0):
+        """ force-stop + relaunch. City-stuck recovery's bigger hammer:
+        a fresh process clears wedged UI states a swipe cannot."""
+
+        if self._run(
+            "shell",
+            "am",
+            "force-stop", package,
+            timeout=timeout,
+        ) is None:
+            return False
+
+        return self.launch_package(package, timeout=timeout)
+
     def collapse_shade(self, timeout=5.0):
         """Collapses the notification shade if open (harmless if not)."""
 

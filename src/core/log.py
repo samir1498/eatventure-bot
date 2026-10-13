@@ -1,7 +1,17 @@
 """Log central; timestamp com milissegundos permite separar "detectou errado" de "detectou tarde"."""
 
 import logging
+import os
 import sys
+
+
+def _formatter():
+
+    return logging.Formatter(
+        fmt="%(asctime)s.%(msecs)03d %(levelname).1s "
+            "[%(name)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
 
 def setup(level="INFO"):
@@ -17,15 +27,22 @@ def setup(level="INFO"):
 
     handler = logging.StreamHandler(sys.stdout)
 
-    handler.setFormatter(
-        logging.Formatter(
-            fmt="%(asctime)s.%(msecs)03d %(levelname).1s "
-                "[%(name)s] %(message)s",
-            datefmt="%H:%M:%S",
-        )
-    )
+    handler.setFormatter(_formatter())
 
     root.addHandler(handler)
+
+    # O painel redesenha o stdout do tmux por cima das linhas de log,
+    # então um aviso some em segundos. Com EATVENTURE_LOG_FILE o mesmo
+    # registro vai para disco, onde sobrevive ao redesenho.
+    path = os.environ.get("EATVENTURE_LOG_FILE")
+
+    if path:
+
+        arquivo = logging.FileHandler(path, encoding="utf-8")
+
+        arquivo.setFormatter(_formatter())
+
+        root.addHandler(arquivo)
 
     return root
 
@@ -47,7 +64,11 @@ def set_console_level(level):
 
     for handler in root.handlers:
 
-        if isinstance(handler, logging.StreamHandler):
+        # FileHandler herda de StreamHandler: sem esta exceção o
+        # arquivo em disco seria silenciado junto com o terminal.
+        if isinstance(handler, logging.StreamHandler) and not isinstance(
+            handler, logging.FileHandler
+        ):
             handler.setLevel(alvo)
 
     return alvo

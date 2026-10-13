@@ -11,17 +11,23 @@ from core.config import (
     ACTION_SETTLE,
     BOX_STUCK_UPDATES,
     BOX_SUPPRESS_UPDATES,
+    CITY_STUCK_RESTART_AFTER,
+    CITY_STUCK_SWEEP_AFTER,
     CYCLE_CATEGORIES,
     DISMISS_ACTIONS,
     DISMISS_ATTEMPTS_BEFORE_SCROLL,
     EXPLORATION_DELAY,
     EXPLORATION_DELAY_AFTER_ACTION,
     FOOD_IGNORE_IOU,
+    FOOD_IGNORE_TTL,
     FOOD_MAX_ATTEMPTS,
+    GAME_PACKAGE,
     GRAY_STUCK_UPDATES,
     GRAY_SUPPRESS_UPDATES,
     MAX_DETECTION_AGE,
     MAX_SWIPES,
+    PROGRESS_ACTIONS,
+    RED_ARROW_GATE_MARGIN,
     REPEATED_ACTION_WARNING,
     STATE_ENTRY_SETTLE,
     STATE_TIMEOUTS,
@@ -32,6 +38,8 @@ from core.config import (
     UPGRADE_FOOD_MAX_REPEATS,
     UPGRADE_FOOD_STUCK_UPDATES,
     UPGRADE_FOOD_SUPPRESS_UPDATES,
+    UPGRADE_EMPTY_VISITS,
+    UPGRADE_IGNORE_SECONDS,
     UP_FOOD_WAIT,
     VIEW_MOVING_ACTIONS,
 )
@@ -60,20 +68,27 @@ GRAY_DISMISS_CATEGORIES = ("gray_coin", "gray_max")
 # The first four close whatever should not be open,
 # before any game action.
 #
-# up_food in NORMAL does the SAME as in FOOD (long press of
-# UPGRADE_FOOD_PRESS s). If the panel opens by accident and the press
-# never resolves, _trap_guard diverts to "dismiss" (HOLD on a
-# fixed point, covered by
-# tests/test_pipeline.py::test_dismiss_toca_no_ponto_neutro)
-# for UPGRADE_FOOD_DISMISS_ROUNDS rounds before trying the
-# press again. "upgrade_food" stays out of DISMISS_ACTIONS
-# on purpose: the closing ladder does not apply to it.
+# up_food sits LAST in NORMAL on purpose: the up_food template (blue
+# button w/ coin) also matches the main-view cost buttons at ~0.97
+# confidence. At high priority it hijacks NORMAL and fires 4s
+# upgrade_food presses on the wrong screen, overlapping the FOOD
+# panel cycle. Demoted below food/box so real station taps win; the
+# FOOD state still handles the panel.
+#
+# food itself is gated by the red upgrade badge (see _handle_food):
+# dishes WITHOUT a badge are not upgradeable, and tapping them just
+# opens a station view the bot then dismisses (open-then-dismiss
+# loop). Strict gate = badge or nothing.
+# The gray pair (dimmed price chips) usually sits on the MAIN view as
+# permanent chrome for unaffordable/maxed stations — a tap never
+# resolves them. So they sit BELOW the real game actions: if they
+# outranked plane/build/delivery/new_point/food, an unaffordable chip
+# would starve the whole city (315 gray_max taps in one 5.5h run).
+# The GRAY_STUCK suppression still protects panels where they truly
+# block.
 NORMAL_RULES = [
     ("open_store", "open_store_click", None),
     ("close", "close", None),
-    ("gray_max", "gray_max", None),
-    ("gray_coin", "gray_coin", None),
-    ("up_food", "upgrade_food", None),
     ("box", "open_box", None),
 
     ("plane", "plane", RENOVATE),
@@ -82,6 +97,10 @@ NORMAL_RULES = [
     ("delivery", "delivery", DELIVERY),
     ("new_point", "new_point", NEW_POINT),
     ("food", "food", FOOD),
+    ("up_food", "upgrade_food", None),
+
+    ("gray_max", "gray_max", None),
+    ("gray_coin", "gray_coin", None),
 ]
 
 RENOVATE_RULES = [
@@ -299,8 +318,26 @@ class StateMachine:
         # escalation ladder instead of repeating what did not work.
         self._dismiss_attempts = 0
 
+        # City-stuck recovery: last time an action proved the city
+        # is moving forward (PROGRESS_ACTIONS or a renovation
+        # door). Recovery stage 0 = none, 1 = forced sweep done,
+        # 2 = app restarted. Reset by real progress.
+        self._last_progress = time.monotonic()
+        self._recovery_stage = 0
+
         # How many times it already had to scroll to escape.
         self._dismiss_rounds = 0
+
+        # Empty-Upgrades-panel guard: consecutive UPGRADE visits with
+        # no buy, and until when the `upgrade` button stays ignored.
+        # Same idea as _ignored_food, but time-boxed instead of
+        # swipe-reset (the button is fixed nav chrome — swipes never
+        # move it, so a swipe reset would never stick).
+        self._upgrade_empty_visits = 0
+        self._upgrade_ignored_until = 0.0
+
+        # Whether the current UPGRADE visit bought anything yet.
+        self._upgrade_did_item = False
 
     def set_game_foreground(self, in_foreground):
         """Called from main.py's game-ensure check. None = unknown, keep previous."""
@@ -328,6 +365,27 @@ class StateMachine:
         if "close" not in categories:
 
             categories.append("close")
+
+        # In NORMAL the red-arrow badge must be visible so the
+        # food rule can gate on it. FIRST, not last: the detector
+        # stops at the first matching category, so anything after
+        # `food` would never be searched on a food screen (and the
+        # gate would block every food tap). One template, searched
+        # every NORMAL pass; never acted on (no rule row fires it).
+        # Same pattern as "close" below, opposite end.
+        if self.state == NORMAL and "red_arrow" not in categories:
+
+            categories.insert(0, "red_arrow")
+
+        # While `upgrade` is on cooldown the rule would be skipped
+        # anyway, but asking for it still costs a match that stops the
+        # pass before delivery/new_point/food — so the bot would keep
+        # swiping while "ignoring upgrades". Better to not ask.
+        if self.state == NORMAL and self._upgrade_ignored():
+
+            if "upgrade" in categories:
+
+                categories.remove("upgrade")
 
         return categories
 
@@ -498,6 +556,8 @@ class StateMachine:
                     if self._box_suppressed == 0:
                         self._box_streak = 0
 
+            self._city_stuck_check()
+
             acted = self._apply_rules(
                 detections,
                 STATE_RULES.get(self.state, NORMAL_RULES),
@@ -538,6 +598,10 @@ class StateMachine:
                     category == "box"
                     and self._box_suppressed > 0
                 )
+                or (
+                    category == "upgrade"
+                    and self._upgrade_ignored()
+                )
             ):
                 continue
 
@@ -545,6 +609,18 @@ class StateMachine:
 
             if detection is None:
                 continue
+
+            # Red-badge preference: dishes WITH a red upgrade badge are
+            # upgradeable — prefer them, but fall back to any visible
+            # dish when no badge is detected (badge templates miss on
+            # some views; a strict gate blinded the bot entirely).
+            if category == "food" and self.state == NORMAL:
+
+                badged = self._find_badged_food(detections)
+
+                if badged is not None:
+
+                    detection = badged
 
             # In DEBUG, shows which priority won and what
             # was on screen with it. That is what answers "why
@@ -649,6 +725,20 @@ class StateMachine:
 
             self._mark_cycle(detection["category"])
 
+        # Real forward motion resets the city-stuck clock (and the
+        # recovery ladder with it).
+        if action in PROGRESS_ACTIONS or (
+            detection and detection["category"] in CYCLE_CATEGORIES
+        ):
+
+            self._last_progress = time.monotonic()
+            self._recovery_stage = 0
+
+        # A buy inside UPGRADE: this visit was not empty.
+        if action == "upgrade_item":
+
+            self._upgrade_did_item = True
+
         self._count_repeat(action)
 
         if self.detector is not None and detection is not None:
@@ -660,11 +750,16 @@ class StateMachine:
 
             self._enter(next_state)
 
-        # After _enter (which does not touch _food_target): stores
-        # WHICH item entered FOOD, so _wait_or_give_up knows what
-        # to ignore if it gives up.
+        # After _enter (which resets up_food_wait_start): arms the
+        # FOOD give-up timer AND stores WHICH item entered FOOD, so
+        # _wait_or_give_up fires UP_FOOD_WAIT after the tap even when
+        # up_food never shows up — without this the timer stays None,
+        # _wait_or_give_up no-ops, and the only exit is the 5s state
+        # timeout (which registers no failure, so the dish is tapped
+        # forever).
         if action == "food":
             self._food_target = detection
+            self.up_food_wait_start = time.monotonic()
 
         return True
 
@@ -729,6 +824,11 @@ class StateMachine:
 
         self.cycle_last = duracao
         self.cycle_at = agora
+
+        # Renovation door = new city coming = new general upgrades:
+        # the empty-panel ignore must not survive into it.
+        self._upgrade_empty_visits = 0
+        self._upgrade_ignored_until = 0.0
 
     def cycle_stats(self):
         """(elapsed time, last cycle, count) for the HUD; last cycle is None until the first build/plane."""
@@ -959,6 +1059,18 @@ class StateMachine:
         self.state = state
         self.state_entered = time.monotonic()
 
+        # UPGRADE visit bookkeeping: entering arms the per-visit buy
+        # flag; leaving for NORMAL accounts the visit (empty ones
+        # pile up toward ignoring the button — see
+        # _account_upgrade_visit).
+        if state == UPGRADE:
+
+            self._upgrade_did_item = False
+
+        elif previous_state == UPGRADE and state == NORMAL:
+
+            self._account_upgrade_visit()
+
         # Previous-state locals do not leak
         # into the next one.
         self.up_food_wait_start = None
@@ -987,6 +1099,12 @@ class StateMachine:
         if timeout is None:
             return False
 
+        # Same async overlap as _wait_or_give_up: the worker holds the
+        # press on its own thread, so a state timeout must not fire
+        # mid-press either — freeze the clock while busy.
+        if self.action_manager.is_busy():
+            return False
+
         elapsed = time.monotonic() - self.state_entered
 
         if elapsed < timeout:
@@ -997,6 +1115,17 @@ class StateMachine:
             self.state,
             elapsed,
         )
+
+        # Timeout exit for FOOD: without this the give-up path in
+        # _wait_or_give_up is skipped entirely (e.g. panel opened with
+        # no up_food AND no gray, or tap landed on a dead frame), so
+        # the dish would be tapped again on the next NORMAL pass —
+        # the "FOOD stuck" infinite loop. Registering here feeds the
+        # FOOD_MAX_ATTEMPTS ignore instead.
+        if self.state == FOOD and self._food_target is not None:
+
+            self._register_food_failure(self._food_target)
+            self._food_target = None
 
         self._enter(NORMAL)
 
@@ -1075,7 +1204,22 @@ class StateMachine:
         if self.up_food_wait_start is None:
             return
 
-        elapsed = time.monotonic() - self.up_food_wait_start
+        # Async overlap guard: the action worker runs the press on its
+        # own thread (UPGRADE_FOOD_PRESS=4s > UP_FOOD_WAIT=2s). While the
+        # worker is busy the screen still shows the pre-press state, so
+        # don't let the timer expire mid-press — freeze the clock.
+        if self.action_manager.is_busy():
+            return
+
+        # Timer runs from the last FINISHED action, not from submit:
+        # last_finished_at is only set when the worker thread completes
+        # the press, so a slow/queued press can't be cut off early.
+        # getattr: the test fake has no worker thread.
+        last_finished = getattr(self.action_manager, "last_finished_at", 0.0)
+        elapsed = time.monotonic() - max(
+            self.up_food_wait_start,
+            last_finished,
+        )
 
         if elapsed < UP_FOOD_WAIT:
             return
@@ -1093,7 +1237,7 @@ class StateMachine:
         self._enter(NORMAL)
 
     def _register_food_failure(self, target):
-        """Counts CONSECUTIVE give-ups on the same item (by IoU); on reaching FOOD_MAX_ATTEMPTS, ignores it until the next swipe — before that, returns to NORMAL and lets it try again (it may just be up_food slow to appear)."""
+        """Counts CONSECUTIVE give-ups on the same item (by IoU); on reaching FOOD_MAX_ATTEMPTS, ignores it until the next swipe or FOOD_IGNORE_TTL passing, whichever comes first — before that, returns to NORMAL and lets it try again (it may just be up_food slow to appear)."""
 
         if (
             self._food_fail_target is not None
@@ -1116,7 +1260,7 @@ class StateMachine:
             FOOD_MAX_ATTEMPTS,
         )
 
-        self._ignored_food.append(target)
+        self._ignored_food.append((target, time.monotonic()))
 
         self._food_fail_target = None
         self._food_fail_count = 0
@@ -1147,12 +1291,170 @@ class StateMachine:
         return None
 
     def _is_ignored_food(self, detection):
-        """Same item as a 'food' that already exhausted UP_FOOD_WAIT without up_food (same on-screen position, compared by IoU since the screen does not move outside a swipe)."""
+        """Same item as a 'food' that already exhausted UP_FOOD_WAIT without up_food (same on-screen position, compared by IoU since the screen does not move outside a swipe). Entries expire after FOOD_IGNORE_TTL — a bot kept busy by other chrome never swipes, and swipe-only expiry would ignore the dish forever."""
+
+        now = time.monotonic()
+
+        alive = [
+            (ignored, ignored_at)
+            for ignored, ignored_at in self._ignored_food
+            if now - ignored_at < FOOD_IGNORE_TTL
+        ]
+
+        self._ignored_food = alive
 
         return any(
             self._iou(detection, ignored) >= FOOD_IGNORE_IOU
-            for ignored in self._ignored_food
+            for ignored, _ in alive
         )
+
+    def _upgrade_ignored(self):
+        """`upgrade` button on cooldown after UPGRADE_EMPTY_VISITS
+        consecutive empty visits ("You have all upgrades!")."""
+
+        return time.monotonic() < self._upgrade_ignored_until
+
+    def _account_upgrade_visit(self):
+        """Called when leaving UPGRADE for NORMAL (close tap or
+        timeout — _enter is the single funnel, so both land here). A
+        visit with no buy is empty; UPGRADE_EMPTY_VISITS in a row
+        ignores the button for UPGRADE_IGNORE_SECONDS. A visit with
+        a buy resets the count."""
+
+        if self._upgrade_did_item:
+
+            self._upgrade_empty_visits = 0
+
+            return
+
+        self._upgrade_empty_visits += 1
+
+        if self._upgrade_empty_visits >= UPGRADE_EMPTY_VISITS:
+
+            self._upgrade_empty_visits = 0
+
+            self._upgrade_ignored_until = (
+                time.monotonic() + UPGRADE_IGNORE_SECONDS
+            )
+
+            logger.warning(
+                "UPGRADE empty %d times in a row — "
+                "ignoring `upgrade` for %.0fs",
+                UPGRADE_EMPTY_VISITS,
+                UPGRADE_IGNORE_SECONDS,
+            )
+
+    def _find_badged_food(self, detections):
+        """First 'food' detection with a 'red_arrow' badge on it (Karahan-style gate). The badge floats above the dish, so the test is badge-center inside the dish box inflated by RED_ARROW_GATE_MARGIN — not IoU (badge and dish barely overlap)."""
+
+        badges = [
+            d
+            for d in detections
+            if d.get("category") == "red_arrow"
+        ]
+
+        if not badges:
+            return None
+
+        for detection in detections:
+
+            if detection.get("category") != "food":
+                continue
+
+            if self._is_ignored_food(detection):
+                continue
+
+            if any(
+                self._badge_near(badge, detection)
+                for badge in badges
+            ):
+                return detection
+
+        return None
+
+    @staticmethod
+    def _badge_near(badge, food):
+
+        margin = RED_ARROW_GATE_MARGIN
+
+        center_x = badge["x"] + badge["width"] / 2
+        center_y = badge["y"] + badge["height"] / 2
+
+        return (
+            food["x"] - margin
+            <= center_x
+            <= food["x"] + food["width"] + margin
+            and food["y"] - margin
+            <= center_y
+            <= food["y"] + food["height"] + margin
+        )
+
+    def _city_stuck_check(self):
+        """Recovery ladder for a city going nowhere (shikhar-style escalation): 10 min without progress forces a full sweep; 15 min force-stops + relaunches the game. Only runs in NORMAL — inside a panel we are mid-task, not stuck."""
+
+        if self.state != NORMAL:
+            return
+
+        # Game not in front (crashed, or the user opened something):
+        # main.py's game-ensure owns that case. Firing here would
+        # swipe and restart into the wrong app.
+        if not self._game_in_foreground:
+            return
+
+        idle = time.monotonic() - self._last_progress
+
+        if (
+            idle >= CITY_STUCK_RESTART_AFTER
+            and self._recovery_stage < 2
+        ):
+
+            self._recovery_stage = 2
+
+            logger.warning(
+                "no progress for %.0fs — restarting %s",
+                idle,
+                GAME_PACKAGE,
+            )
+
+            restarted = self.action_manager.android.restart_package(
+                GAME_PACKAGE
+            )
+
+            # Fresh process, fresh eyes: whatever was wedged is
+            # gone, and the relaunch needs settle time before taps.
+            # The ladder rearms (stage back to 0): still stuck in
+            # 10 more minutes means sweeping again, not silence.
+            # The _last_progress reset above is what stops an
+            # immediate refire, not the stage.
+            self.reset()
+            self.last_action_time = time.monotonic()
+            self._last_progress = time.monotonic()
+            self._recovery_stage = 0
+
+            if not restarted:
+
+                logger.warning(
+                    "restart failed — carrying on without it"
+                )
+
+        elif (
+            idle >= CITY_STUCK_SWEEP_AFTER
+            and self._recovery_stage < 1
+        ):
+
+            self._recovery_stage = 1
+
+            logger.warning(
+                "no progress for %.0fs — forcing full sweep",
+                idle,
+            )
+
+            # Ignored dishes get a new chance, and the next
+            # update swipes immediately instead of waiting out
+            # the exploration interval.
+            self._reset_food_tracking()
+            self.explore_anchor = 0.0
+            self.explore_found = False
 
     @staticmethod
     def _iou(a, b):
