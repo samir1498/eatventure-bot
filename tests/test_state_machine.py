@@ -486,16 +486,16 @@ def test_food_sem_badge_ainda_toca_mas_desiste_e_ignora():
 
     # 2. up_food never shows up: give-up fires UP_FOOD_WAIT after the
     # tap (not the 5s state timeout) and counts the first failure.
-    clock.advance(sm.UP_FOOD_WAIT + 0.1)
+    clock.advance(UP_FOOD_WAIT + 0.1)
     machine.update([])
     assert machine.state == sm.NORMAL, machine.state
-    assert machine._food_fail_count == 1, machine._food_fail_count
+    assert machine._give_up["food"]["fail_count"] == 1, machine._give_up
 
     # 3. Two more identical cycles -> dish ignored, no 4th tap.
     for _ in range(2):
         machine.update([dish])
         assert machine.state == sm.FOOD, machine.state
-        clock.advance(sm.UP_FOOD_WAIT + 0.1)
+        clock.advance(UP_FOOD_WAIT + 0.1)
         machine.update([])
 
     taps = [a for a in actions.actions if a == "food"]
@@ -523,18 +523,18 @@ def test_red_arrow_fallback_taps_badge_when_food_missing():
     machine.update([badge])
     assert machine.state == sm.FOOD, machine.state
     assert actions.actions == ["food"], actions.actions
-    assert machine._food_target is not None
-    assert machine._food_target.get("fallback") == "red_arrow"
-    assert (machine._food_target["x"], machine._food_target["y"]) == (300, 400)
+    assert machine._panel_target is not None
+    assert machine._panel_target.get("fallback") == "red_arrow"
+    assert (machine._panel_target["x"], machine._panel_target["y"]) == (300, 400)
 
-    clock.advance(sm.UP_FOOD_WAIT + 0.1)
+    clock.advance(UP_FOOD_WAIT + 0.1)
     machine.update([])
     assert machine.state == sm.NORMAL, machine.state
 
     for _ in range(2):
         machine.update([badge])
         assert machine.state == sm.FOOD, machine.state
-        clock.advance(sm.UP_FOOD_WAIT + 0.1)
+        clock.advance(UP_FOOD_WAIT + 0.1)
         machine.update([])
 
     taps = [a for a in actions.actions if a == "food"]
@@ -555,7 +555,7 @@ def test_red_arrow_fallback_skipped_when_food_present():
     machine.update([detection("food"), detection("red_arrow")])
 
     assert actions.actions == ["food"], actions.actions
-    assert machine._food_target.get("fallback") is None
+    assert machine._panel_target.get("fallback") is None
 
 
 def test_red_arrow_fallback_disabled_taps_nothing():
@@ -589,7 +589,7 @@ def test_red_arrow_fallback_retries_ignored_food_as_new_point():
     for _ in range(3):
         machine.update([badge])
         assert machine.state == sm.FOOD, machine.state
-        clock.advance(sm.UP_FOOD_WAIT + 0.1)
+        clock.advance(UP_FOOD_WAIT + 0.1)
         machine.update([])
         assert machine.state == sm.NORMAL, machine.state
 
@@ -599,8 +599,8 @@ def test_red_arrow_fallback_retries_ignored_food_as_new_point():
 
     assert actions.actions[-1] == "new_point", actions.actions
     assert machine.state == sm.NEW_POINT, machine.state
-    assert machine._food_target["category"] == "new_point"
-    assert machine._food_target.get("fallback") == "red_arrow"
+    assert machine._panel_target["category"] == "new_point"
+    assert machine._panel_target.get("fallback") == "red_arrow"
 
 
 def test_red_arrow_fallback_new_point_ignores_after_failures():
@@ -616,7 +616,7 @@ def test_red_arrow_fallback_new_point_ignores_after_failures():
 
     for _ in range(3):
         machine.update([badge])
-        clock.advance(sm.UP_FOOD_WAIT + 0.1)
+        clock.advance(UP_FOOD_WAIT + 0.1)
         machine.update([])
 
     # Fallback taps arm the give-up timer at tap time, so one
@@ -624,7 +624,7 @@ def test_red_arrow_fallback_new_point_ignores_after_failures():
     for _ in range(3):
         machine.update([badge])
         assert machine.state == sm.NEW_POINT, machine.state
-        clock.advance(sm.UP_FOOD_WAIT + 0.1)
+        clock.advance(UP_FOOD_WAIT + 0.1)
         machine.update([])
         assert machine.state == sm.NORMAL, machine.state
 
@@ -645,7 +645,7 @@ def test_real_new_point_wins_over_fallback():
     machine.update([detection("new_point"), detection("red_arrow")])
 
     assert actions.actions == ["new_point"], actions.actions
-    assert machine._food_target.get("fallback") is None
+    assert machine._panel_target.get("fallback") is None
 
 
 def test_find_skips_ignored_new_point():
@@ -657,7 +657,7 @@ def test_find_skips_ignored_new_point():
 
     assert machine._find([slot], "new_point") is slot
 
-    machine._ignored_new_point.append((slot, clock.now))
+    machine._give_up["new_point"]["ignored"].append((slot, clock.now))
 
     assert machine._find([slot], "new_point") is None
 
@@ -1802,9 +1802,12 @@ def test_nao_toca_com_o_painel_ja_fechado():
 
     # Isolates the causal/settle guard under test: gray suppression
     # (25 updates) would also mute the taps and mask the bug
-    # this test must reproduce.
-    limiar = sm.GRAY_STUCK_UPDATES
-    sm.GRAY_STUCK_UPDATES = 10 ** 9
+    # this test must reproduce. Patched on core.failures, where the
+    # suppression now lives (split from state_machine).
+    from core import failures as _failures
+
+    limiar = _failures.GRAY_STUCK_UPDATES
+    _failures.GRAY_STUCK_UPDATES = 10 ** 9
 
     try:
         # No settle (cooldown + causal guard only): taps into the void.
@@ -1821,7 +1824,7 @@ def test_nao_toca_com_o_painel_ja_fechado():
 
         assert toques == 1, f"{toques} toques onde 1 bastava"
     finally:
-        sm.GRAY_STUCK_UPDATES = limiar
+        _failures.GRAY_STUCK_UPDATES = limiar
 
 
 def test_settle_cobre_a_animacao_configurada():

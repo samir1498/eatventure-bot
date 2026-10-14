@@ -233,7 +233,7 @@ ESCALA_LIBERA_SECAS = 6
 # on ONE detection per frame (_apply_rules), so scanning all 86
 # food templates after already holding 6 dishes changes no decision. Only cuts
 # AFTER finding something — a partial pass never becomes an "empty screen", which would trigger
-# _explore_screen. Leaves margin for _is_ignored_food to discard a few.
+# _explore_screen. Leaves margin for _is_ignored to discard a few.
 # A category outside the dict is scanned in full.
 CATEGORY_MATCH_BUDGET = {
     "food": 6,

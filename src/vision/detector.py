@@ -1762,7 +1762,7 @@ class Detector:
             # Distinct items, not candidates: MAX_MATCHES_PER_TEMPLATE
             # allows 12 candidates from a single template, and the cap exists
             # so the StateMachine has real alternatives when it
-            # discards a detection (_is_ignored_food).
+            # discards a detection (_is_ignored).
             achados = set()
 
             olhados = 0

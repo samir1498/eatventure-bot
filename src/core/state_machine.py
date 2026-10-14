@@ -9,151 +9,38 @@ from core.metrics import formata_duracao
 from core.config import (
     ACTION_COOLDOWN,
     ACTION_SETTLE,
-    BOX_STUCK_UPDATES,
-    BOX_SUPPRESS_UPDATES,
-    CITY_STUCK_RESTART_AFTER,
-    CITY_STUCK_SWEEP_AFTER,
     CYCLE_CATEGORIES,
-    DISMISS_ACTIONS,
-    DISMISS_ATTEMPTS_BEFORE_SCROLL,
-    EXPLORATION_DELAY,
-    EXPLORATION_DELAY_AFTER_ACTION,
-    FOOD_IGNORE_IOU,
-    FOOD_IGNORE_TTL,
-    FOOD_MAX_ATTEMPTS,
-    GAME_PACKAGE,
-    GRAY_STUCK_UPDATES,
-    GRAY_SUPPRESS_UPDATES,
     MAX_DETECTION_AGE,
-    MAX_SWIPES,
     PROGRESS_ACTIONS,
     RED_ARROW_FALLBACK_CATEGORIES,
     RED_ARROW_FALLBACK_ENABLED,
     RED_ARROW_GATE_MARGIN,
-    REPEATED_ACTION_WARNING,
     STATE_ENTRY_SETTLE,
     STATE_TIMEOUTS,
-    SWIPE_START_DIRECTION,
     SWIPE_WAIT_FOR_NO_ACTION,
-    SWIPE_WAITING_TIME,
-    UPGRADE_FOOD_DISMISS_ROUNDS,
-    UPGRADE_FOOD_MAX_REPEATS,
-    UPGRADE_FOOD_STUCK_UPDATES,
-    UPGRADE_FOOD_SUPPRESS_UPDATES,
-    UPGRADE_EMPTY_VISITS,
-    UPGRADE_IGNORE_SECONDS,
-    UP_FOOD_WAIT,
     VIEW_MOVING_ACTIONS,
 )
 
 logger = log.get("state")
 
 
-NORMAL = "NORMAL"
-RENOVATE = "RENOVATE"
-FOOD = "FOOD"
-NEW_POINT = "NEW_POINT"
-UPGRADE = "UPGRADE"
-DELIVERY = "DELIVERY"
-HELPER = "HELPER"
+from core.failures import FailureMixin
+from core.exploration import ExplorationMixin
+from core.rules import (
+    DELIVERY,
+    FOOD,
+    GRAY_DISMISS_CATEGORIES,
+    HELPER,
+    NEW_POINT,
+    NORMAL,
+    NORMAL_RULES,
+    RENOVATE,
+    STATE_RULES,
+    UPGRADE,
+)
 
 
-# Gray dismiss pair: an unreachable price shows dimmed and
-# never resolves on tap — same suppression treatment as up_food.
-GRAY_DISMISS_CATEGORIES = ("gray_coin", "gray_max")
-
-
-# Rules: (category, action, next state). Order = priority
-# (the first category found is the only one executed in the
-# frame); next_state None keeps the current state.
-
-# The first four close whatever should not be open,
-# before any game action.
-#
-# up_food sits LAST in NORMAL on purpose: the up_food template (blue
-# button w/ coin) also matches the main-view cost buttons at ~0.97
-# confidence. At high priority it hijacks NORMAL and fires 4s
-# upgrade_food presses on the wrong screen, overlapping the FOOD
-# panel cycle. Demoted below food/box so real station taps win; the
-# FOOD state still handles the panel.
-#
-# food itself is gated by the red upgrade badge (see _handle_food):
-# dishes WITHOUT a badge are not upgradeable, and tapping them just
-# opens a station view the bot then dismisses (open-then-dismiss
-# loop). Strict gate = badge or nothing.
-# The gray pair (dimmed price chips) usually sits on the MAIN view as
-# permanent chrome for unaffordable/maxed stations — a tap never
-# resolves them. So they sit BELOW the real game actions: if they
-# outranked plane/build/delivery/new_point/food, an unaffordable chip
-# would starve the whole city (315 gray_max taps in one 5.5h run).
-# The GRAY_STUCK suppression still protects panels where they truly
-# block.
-NORMAL_RULES = [
-    ("open_store", "open_store_click", None),
-    ("close", "close", None),
-    ("box", "open_box", None),
-
-    ("plane", "plane", RENOVATE),
-    ("build", "click", RENOVATE),
-    ("upgrade", "upgrade", UPGRADE),
-    ("delivery", "delivery", DELIVERY),
-    ("new_point", "new_point", NEW_POINT),
-    ("food", "food", FOOD),
-    ("up_food", "upgrade_food", None),
-
-    ("gray_max", "gray_max", None),
-    ("gray_coin", "gray_coin", None),
-]
-
-RENOVATE_RULES = [
-    ("renovate", "renovate_click", NORMAL),
-    ("fly", "renovate_click", NORMAL),
-]
-
-DELIVERY_RULES = [
-    ("accept_delivery", "accept_delivery", NORMAL),
-    ("helper", "helper", HELPER),
-    ("close", "close", NORMAL),
-]
-
-HELPER_RULES = [
-    ("invite_helper", "invite_helper", NORMAL),
-    ("delivery", "delivery", DELIVERY),
-    ("close", "close", NORMAL),
-]
-
-# up_upgrade stays in UPGRADE on purpose: on the next
-# frame we look for another item to upgrade. We only leave the
-# screen when there is nothing left.
-UPGRADE_RULES = [
-    ("up_upgrade", "upgrade_item", None),
-    ("close", "close", NORMAL),
-]
-
-STATE_RULES = {
-    NORMAL: NORMAL_RULES,
-    RENOVATE: RENOVATE_RULES,
-    DELIVERY: DELIVERY_RULES,
-    HELPER: HELPER_RULES,
-    UPGRADE: UPGRADE_RULES,
-
-    # FOOD and NEW_POINT have their own wait after the press,
-    # so they are handled in a dedicated handler. The categories
-    # stay here only for the detector filter.
-    FOOD: [
-        ("up_food", "upgrade_food", None),
-        ("gray_max", "gray_max", None),
-        ("gray_coin", "gray_coin", None)
-    ],
-    NEW_POINT: [
-        ("up_food", "new_point_click", None),
-        ("gray_max", "gray_max", None),
-        ("gray_coin", "gray_coin", None),
-    ],
-}
-
-
-class StateMachine:
+class StateMachine(FailureMixin, ExplorationMixin):
 
     # Kept as class attributes for compatibility
     # with code referencing StateMachine.NORMAL.
@@ -180,20 +67,6 @@ class StateMachine:
         self.action_cooldown = ACTION_COOLDOWN
         self.action_settle = ACTION_SETTLE
 
-        # Swipe's own wait, longer than a tap's: a
-        # tap moves a panel, a swipe moves the WHOLE VIEW and
-        # the game keeps sliding by inertia.
-        self.swipe_settle = SWIPE_WAITING_TIME
-
-        # Was the last action a swipe?
-        #
-        # Stored as a FLAG, not as a copy of the
-        # settle value, on purpose: so `machine.action_settle
-        # = 0` keeps disabling the tap wait (which is what the
-        # tests do) without a second stale
-        # number living somewhere else.
-        self._last_was_swipe = False
-
         # Current frame, stored for the dataset recorder.
         self._frame = None
         self._detections = []
@@ -211,34 +84,9 @@ class StateMachine:
         # log with one line per frame.
         self._waited_warned = 0.0
 
-        # Wait after the food long press.
-        self.up_food_wait_start = None
+        self._init_failure_tracking()
 
-        # Current panel target ("food" dish or "new_point" slot),
-        # waiting for up_food. Stored here (and not only in the local
-        # detection) because _wait_or_give_up needs it to know WHICH
-        # item to ignore when giving up.
-        self._food_target = None
-
-        # "food" items that exhausted UP_FOOD_WAIT in
-        # FOOD_MAX_ATTEMPTS consecutive tries — ignored until the
-        # next real swipe, otherwise the bot tries the same item
-        # forever (finding it keeps postponing the swipe).
-        self._ignored_food = []
-
-        # Same for "new_point" slots (a blocked plot the bot tapped
-        # through a badge proxy without ever unlocking). Tracked
-        # apart from food: a badge food gave up on is retried as
-        # new_point, and vice versa must not double-count.
-        self._ignored_new_point = []
-
-        # Last give-up (item + how many times in a row), to know
-        # whether the NEXT one is on the same item or a restart.
-        self._food_fail_target = None
-        self._food_fail_count = 0
-
-        self._new_point_fail_target = None
-        self._new_point_fail_count = 0
+        self._init_exploration_tracking()
 
         # Counted from start, not from the first build: the first
         # stretch is information too.
@@ -257,67 +105,8 @@ class StateMachine:
         self.last_action = None
         self.last_action_at = None
 
-        # Normal pace: a swipe every so often, while
-        # nothing shows up.
-        self.exploration_delay = EXPLORATION_DELAY
-
-        # After FINDING something, exploration is POSTPONED by this
-        # much — not cancelled.
-        self.exploration_action_delay = (
-            EXPLORATION_DELAY_AFTER_ACTION
-        )
-
-        # What the next-swipe wait counts from: the
-        # last swipe, or the last time something was found.
-        self.explore_anchor = time.monotonic()
-
-        # Did the anchor come from a "find"?
-        #
-        # Stored as a FLAG, with the interval derived from it at
-        # call time — not a copy of the number. That is what keeps
-        # `machine.exploration_delay = 0` working (the tests
-        # use that) with no second stored value that
-        # could go stale. Same pattern as
-        # _last_was_swipe.
-        self.explore_found = False
-
-        # Sweep cycle: 5 swipes one way, 5 the other,
-        # indefinitely. The count does NOT reset when the
-        # bot finds something — it used to reset, and the effect was always sweeping
-        # the same slice of the screen (almost every swipe reveals
-        # some target, so the return trip never closed and the far
-        # half of the restaurant was never visited).
-        self.swipe_direction = SWIPE_START_DIRECTION
-        self.swipe_count = 0
-        self.max_swipes = MAX_SWIPES
-
         # Avoid repeating the stale-detection warning on every frame.
         self._stale_warned = 0.0
-
-        # Detects an action repeating without resolving anything.
-        self._last_action = None
-        self._repeat_count = 0
-
-        # Consecutive upgrade_food presses in NORMAL (see
-        # _trap_guard: a panel that never resolves falls back to dismiss).
-        self._up_food_repeats = 0
-
-        # Consecutive updates with up_food visible without the panel
-        # resolving (see update: stuck popup, e.g. unreachable
-        # price) + active up_food suppression.
-        self._up_food_streak = 0
-        self._up_food_suppressed = 0
-
-        # Same one level up: dimmed gray_coin/gray_max
-        # (unreachable price) outrank up_food and
-        # lock the panel the same way — suppression of the pair.
-        self._gray_streak = 0
-        self._gray_suppressed = 0
-
-        # Same one step down: a chest that never resolves is a
-        # paid offer, not loot — suppression of open_box.
-        self._box_streak = 0
-        self._box_suppressed = 0
 
         # Foreground gate: while the game is not focused (settings,
         # Gmail, Play sheet) no action may fire. Set from main.py's
@@ -325,31 +114,6 @@ class StateMachine:
         # frames behave as before.
         self._game_in_foreground = True
         self._foreground_warned = 0.0
-
-        # Consecutive attempts at closing something. Climbs the
-        # escalation ladder instead of repeating what did not work.
-        self._dismiss_attempts = 0
-
-        # City-stuck recovery: last time an action proved the city
-        # is moving forward (PROGRESS_ACTIONS or a renovation
-        # door). Recovery stage 0 = none, 1 = forced sweep done,
-        # 2 = app restarted. Reset by real progress.
-        self._last_progress = time.monotonic()
-        self._recovery_stage = 0
-
-        # How many times it already had to scroll to escape.
-        self._dismiss_rounds = 0
-
-        # Empty-Upgrades-panel guard: consecutive UPGRADE visits with
-        # no buy, and until when the `upgrade` button stays ignored.
-        # Same idea as _ignored_food, but time-boxed instead of
-        # swipe-reset (the button is fixed nav chrome — swipes never
-        # move it, so a swipe reset would never stick).
-        self._upgrade_empty_visits = 0
-        self._upgrade_ignored_until = 0.0
-
-        # Whether the current UPGRADE visit bought anything yet.
-        self._upgrade_did_item = False
 
     def set_game_foreground(self, in_foreground):
         """Called from main.py's game-ensure check. None = unknown, keep previous."""
@@ -466,107 +230,7 @@ class StateMachine:
 
         else:
 
-            # Panel went away on its own: the count restarts from zero
-            # the next time up_food shows up.
-            if self.state == NORMAL:
-                if any(
-                    d.get("category") == "up_food"
-                    for d in detections or []
-                ):
-                    self._up_food_streak += 1
-                    if (
-                        self._up_food_streak >= UPGRADE_FOOD_STUCK_UPDATES
-                        and self._up_food_suppressed <= 0
-                    ):
-                        self._up_food_suppressed = (
-                            UPGRADE_FOOD_SUPPRESS_UPDATES
-                        )
-                        self._up_food_streak = 0
-                        logger.warning(
-                            "up_food stuck open for %d updates "
-                            "in NORMAL (unresolvable panel?) — "
-                            "suppressing up_food for %d updates "
-                            "so other upgrades get a turn",
-                            UPGRADE_FOOD_STUCK_UPDATES,
-                            UPGRADE_FOOD_SUPPRESS_UPDATES,
-                        )
-                else:
-                    self._up_food_repeats = 0
-                    self._up_food_streak = 0
-                    self._up_food_suppressed = 0
-                if self._up_food_suppressed > 0:
-                    self._up_food_suppressed -= 1
-                    if self._up_food_suppressed == 0:
-                        # Suppression exhausted: up_food gets a
-                        # fresh window (zeroed streak) before it
-                        # can be suppressed again — alternates
-                        # between the panel and the other upgrades.
-                        self._up_food_streak = 0
-                # Same cycle for the gray pair: visible for N
-                # updates without resolving = stuck popup; suppress
-                # so up_food and the upgrades below get
-                # their turn, then the pair gets another chance.
-                if any(
-                    d.get("category") in GRAY_DISMISS_CATEGORIES
-                    for d in detections or []
-                ):
-                    self._gray_streak += 1
-                    if (
-                        self._gray_streak >= GRAY_STUCK_UPDATES
-                        and self._gray_suppressed <= 0
-                    ):
-                        self._gray_suppressed = (
-                            GRAY_SUPPRESS_UPDATES
-                        )
-                        self._gray_streak = 0
-                        logger.warning(
-                            "gray dismiss (gray_coin/gray_max) "
-                            "stuck open for %d updates in "
-                            "NORMAL (unresolvable panel?) — "
-                            "suppressing gray dismiss for %d "
-                            "updates so lower rules get a turn",
-                            GRAY_STUCK_UPDATES,
-                            GRAY_SUPPRESS_UPDATES,
-                        )
-                else:
-                    self._gray_streak = 0
-                    self._gray_suppressed = 0
-                if self._gray_suppressed > 0:
-                    self._gray_suppressed -= 1
-                    if self._gray_suppressed == 0:
-                        self._gray_streak = 0
-                # Same cycle for the reward chest: visible for N
-                # updates without resolving = paid offer (e.g.
-                # starter pack), not free loot; suppress open_box
-                # so the bot backs off instead of tapping the paywall.
-                if any(
-                    d.get("category") == "box"
-                    for d in detections or []
-                ):
-                    self._box_streak += 1
-                    if (
-                        self._box_streak >= BOX_STUCK_UPDATES
-                        and self._box_suppressed <= 0
-                    ):
-                        self._box_suppressed = (
-                            BOX_SUPPRESS_UPDATES
-                        )
-                        self._box_streak = 0
-                        logger.warning(
-                            "box stuck open for %d updates in "
-                            "NORMAL (paid offer?) — "
-                            "suppressing open_box for %d "
-                            "updates",
-                            BOX_STUCK_UPDATES,
-                            BOX_SUPPRESS_UPDATES,
-                        )
-                else:
-                    self._box_streak = 0
-                    self._box_suppressed = 0
-                if self._box_suppressed > 0:
-                    self._box_suppressed -= 1
-                    if self._box_suppressed == 0:
-                        self._box_streak = 0
+            self._track_stuck_popups(detections)
 
             self._city_stuck_check()
 
@@ -624,26 +288,27 @@ class StateMachine:
                 # Orphan-badge fallback: the upgrade badge shows but
                 # its station does not (panda over the plot, empty
                 # dashed outline) — tap the badge center as a proxy
-                # instead of stalling. Food keeps priority: a
-                # new_point proxy never steals a badge the food row
-                # would claim, and fires once food gave up on it.
+                # instead of stalling. Food keeps priority: the food
+                # proxy is resolved once here, so a new_point proxy
+                # never steals a badge the food row would claim, and
+                # fires once food gave up on it.
                 if (
                     category in RED_ARROW_FALLBACK_CATEGORIES
                     and self.state == NORMAL
-                    and not (
-                        category == "new_point"
-                        and self._find_fallback_proxy(
-                            detections,
-                            "food",
-                        )
-                        is not None
-                    )
                 ):
 
-                    detection = self._find_fallback_proxy(
-                        detections,
-                        category,
+                    food_proxy = (
+                        self._find_fallback_proxy(detections, "food")
+                        if category == "new_point"
+                        else None
                     )
+
+                    if food_proxy is None:
+
+                        detection = self._find_fallback_proxy(
+                            detections,
+                            category,
+                        )
 
                 if detection is None:
                     continue
@@ -800,7 +465,7 @@ class StateMachine:
         # timeout (which registers no failure, so the dish is tapped
         # forever).
         if action == "food":
-            self._food_target = detection
+            self._panel_target = detection
             self.up_food_wait_start = time.monotonic()
 
         # Panel target only: the timer arms lazily on the first
@@ -808,7 +473,7 @@ class StateMachine:
         # except badge-fallback taps, which never open a panel
         # (same city view), so they arm at tap time like food.
         if action == "new_point":
-            self._food_target = detection
+            self._panel_target = detection
             if detection is not None and detection.get("fallback"):
                 self.up_food_wait_start = time.monotonic()
 
@@ -917,95 +582,6 @@ class StateMachine:
 
             "acoes": sum(self.action_counts.values()),
         }
-
-    def _trap_guard(self, action, detection):
-        """NORMAL only: up_food surviving UPGRADE_FOOD_MAX_REPEATS presses falls back to "dismiss" (HOLD on a fixed point, no detection) for UPGRADE_FOOD_DISMISS_ROUNDS rounds; then the cycle restarts and the press gets another chance. Any other action resets the count."""
-
-        if self.state != NORMAL or action != "upgrade_food":
-            self._up_food_repeats = 0
-
-            return action, detection
-
-        self._up_food_repeats += 1
-
-        if self._up_food_repeats <= UPGRADE_FOOD_MAX_REPEATS:
-            return action, detection
-
-        if self._up_food_repeats <= (
-            UPGRADE_FOOD_MAX_REPEATS + UPGRADE_FOOD_DISMISS_ROUNDS
-        ):
-            logger.warning(
-                "upgrade_food (up_food) survived %d presses in NORMAL — "
-                "dismissing instead (round %d/%d)",
-                UPGRADE_FOOD_MAX_REPEATS,
-                self._up_food_repeats - UPGRADE_FOOD_MAX_REPEATS,
-                UPGRADE_FOOD_DISMISS_ROUNDS,
-            )
-
-            return "dismiss", None
-
-        self._up_food_repeats = 0
-
-        return action, detection
-
-    def _escalate(self, action):
-        """Closing ladder: N attempts on the fixed point, then scroll to the end and try again — the point may be what OPENS the panel, so tapping it sometimes reopens instead of closing; there is no BACK in this game."""
-
-        if action not in DISMISS_ACTIONS:
-
-            # Normal action: progress, reset the ladder.
-            self._dismiss_attempts = 0
-            self._dismiss_rounds = 0
-
-            return action
-
-        self._dismiss_attempts += 1
-
-        if (
-            self._dismiss_attempts
-            <= DISMISS_ATTEMPTS_BEFORE_SCROLL
-        ):
-            return action
-
-        # Out of point attempts: scroll and restart the
-        # count, to try the point again later.
-        self._dismiss_attempts = 0
-        self._dismiss_rounds += 1
-
-        logger.warning(
-            "'%s' did not close in %d attempts (round %d) — "
-            "scrolling the screen to the end to find a position "
-            "where the point is safe",
-            action,
-            DISMISS_ATTEMPTS_BEFORE_SCROLL,
-            self._dismiss_rounds,
-        )
-
-        return "scroll_bottom"
-
-    def _count_repeat(self, action):
-        """Warns when the same action repeats without leading anywhere (typical symptom: a dismiss point that does not close the panel)."""
-
-        if action != self._last_action:
-
-            self._last_action = action
-            self._repeat_count = 1
-
-            return
-
-        self._repeat_count += 1
-
-        if self._repeat_count % REPEATED_ACTION_WARNING:
-            return
-
-        logger.warning(
-            "'%s' repeated %d times in a row in %s without "
-            "resolving. Wrong dismiss point, or missing "
-            "template for what is on screen?",
-            action,
-            self._repeat_count,
-            self.state,
-        )
 
     def frame_floor(self):
         """Minimum CAPTURE instant for a frame to authorize an action. Single definition, shared with the VisionWorker (avoids diverging and acting on a stale screen); counted from the END of the action, not submission, since async actions vary in duration (500ms swipe, 4s food long press); the final floor is the largest of the state-entry wait and the post-action settle."""
@@ -1173,15 +749,15 @@ class StateMachine:
         # the dish would be tapped again on the next NORMAL pass —
         # the "FOOD stuck" infinite loop. Registering here feeds the
         # FOOD_MAX_ATTEMPTS ignore instead.
-        if self._food_target is not None:
+        if self._panel_target is not None:
 
             if self.state == FOOD:
-                self._register_food_failure(self._food_target)
+                self._register_give_up(self._panel_target, "food")
 
             elif self.state == NEW_POINT:
-                self._register_new_point_failure(self._food_target)
+                self._register_give_up(self._panel_target, "new_point")
 
-            self._food_target = None
+            self._panel_target = None
 
         self._enter(NORMAL)
 
@@ -1259,121 +835,6 @@ class StateMachine:
 
         self._wait_or_give_up()
 
-    def _wait_or_give_up(self):
-        """The screen may take a while to update after acting; waits UP_FOOD_WAIT before giving up."""
-
-        if self.up_food_wait_start is None:
-            return
-
-        # Async overlap guard: the action worker runs the press on its
-        # own thread (UPGRADE_FOOD_PRESS=4s > UP_FOOD_WAIT=2s). While the
-        # worker is busy the screen still shows the pre-press state, so
-        # don't let the timer expire mid-press — freeze the clock.
-        if self.action_manager.is_busy():
-            return
-
-        # Timer runs from the last FINISHED action, not from submit:
-        # last_finished_at is only set when the worker thread completes
-        # the press, so a slow/queued press can't be cut off early.
-        # getattr: the test fake has no worker thread.
-        last_finished = getattr(self.action_manager, "last_finished_at", 0.0)
-        elapsed = time.monotonic() - max(
-            self.up_food_wait_start,
-            last_finished,
-        )
-
-        if elapsed < UP_FOOD_WAIT:
-            return
-
-        logger.info(
-            "No up_food in %.1fs",
-            UP_FOOD_WAIT,
-        )
-
-        if self._food_target is not None:
-
-            if self.state == FOOD:
-                self._register_food_failure(self._food_target)
-
-            elif self.state == NEW_POINT:
-                self._register_new_point_failure(self._food_target)
-
-            self._food_target = None
-
-        self._enter(NORMAL)
-
-    def _register_food_failure(self, target):
-        """Counts CONSECUTIVE give-ups on the same item (by IoU); on reaching FOOD_MAX_ATTEMPTS, ignores it until the next swipe or FOOD_IGNORE_TTL passing, whichever comes first — before that, returns to NORMAL and lets it try again (it may just be up_food slow to appear)."""
-
-        if (
-            self._food_fail_target is not None
-            and self._iou(target, self._food_fail_target)
-            >= FOOD_IGNORE_IOU
-        ):
-            self._food_fail_count += 1
-
-        else:
-            self._food_fail_count = 1
-
-        self._food_fail_target = target
-
-        if self._food_fail_count < FOOD_MAX_ATTEMPTS:
-            return
-
-        logger.warning(
-            "'food' without up_food in %d consecutive attempts — "
-            "ignoring until the next swipe",
-            FOOD_MAX_ATTEMPTS,
-        )
-
-        self._ignored_food.append((target, time.monotonic()))
-
-        self._food_fail_target = None
-        self._food_fail_count = 0
-
-    def _register_new_point_failure(self, target):
-        """Same consecutive-give-up counting as food, on its own
-        counter and ignore list — a badge that failed as food gets a
-        full new_point chance, not a shared one."""
-
-        if (
-            self._new_point_fail_target is not None
-            and self._iou(target, self._new_point_fail_target)
-            >= FOOD_IGNORE_IOU
-        ):
-            self._new_point_fail_count += 1
-
-        else:
-            self._new_point_fail_count = 1
-
-        self._new_point_fail_target = target
-
-        if self._new_point_fail_count < FOOD_MAX_ATTEMPTS:
-            return
-
-        logger.warning(
-            "'new_point' without up_food in %d consecutive attempts — "
-            "ignoring until the next swipe",
-            FOOD_MAX_ATTEMPTS,
-        )
-
-        self._ignored_new_point.append((target, time.monotonic()))
-
-        self._new_point_fail_target = None
-        self._new_point_fail_count = 0
-
-    def _reset_food_tracking(self):
-        """Forgets ignored items and the attempt count — called on every real swipe, which changes what is on screen."""
-
-        self._ignored_food = []
-        self._ignored_new_point = []
-
-        self._food_fail_target = None
-        self._food_fail_count = 0
-
-        self._new_point_fail_target = None
-        self._new_point_fail_count = 0
-
     def _find(self, detections, category):
         """First detection of the category. No threshold refiltering here on purpose: a second threshold once lived in this method, diverging from the detector's, and the winner was the first in filename alphabetical order, not the best."""
 
@@ -1382,93 +843,14 @@ class StateMachine:
             if detection["category"] != category:
                 continue
 
-            if category == "food" and self._is_ignored_food(
-                detection
-            ):
-                continue
-
-            if category == "new_point" and self._is_ignored_new_point(
-                detection
+            if category in ("food", "new_point") and self._is_ignored(
+                detection, category
             ):
                 continue
 
             return detection
 
         return None
-
-    def _is_ignored_food(self, detection):
-        """Same item as a 'food' that already exhausted UP_FOOD_WAIT without up_food (same on-screen position, compared by IoU since the screen does not move outside a swipe). Entries expire after FOOD_IGNORE_TTL — a bot kept busy by other chrome never swipes, and swipe-only expiry would ignore the dish forever."""
-
-        now = time.monotonic()
-
-        alive = [
-            (ignored, ignored_at)
-            for ignored, ignored_at in self._ignored_food
-            if now - ignored_at < FOOD_IGNORE_TTL
-        ]
-
-        self._ignored_food = alive
-
-        return any(
-            self._iou(detection, ignored) >= FOOD_IGNORE_IOU
-            for ignored, _ in alive
-        )
-
-    def _is_ignored_new_point(self, detection):
-        """Same slot as a 'new_point' that already exhausted UP_FOOD_WAIT
-        without up_food. Separate list from food: a badge food gave up
-        on is retried as new_point."""
-
-        now = time.monotonic()
-
-        alive = [
-            (ignored, ignored_at)
-            for ignored, ignored_at in self._ignored_new_point
-            if now - ignored_at < FOOD_IGNORE_TTL
-        ]
-
-        self._ignored_new_point = alive
-
-        return any(
-            self._iou(detection, ignored) >= FOOD_IGNORE_IOU
-            for ignored, _ in alive
-        )
-
-    def _upgrade_ignored(self):
-        """`upgrade` button on cooldown after UPGRADE_EMPTY_VISITS
-        consecutive empty visits ("You have all upgrades!")."""
-
-        return time.monotonic() < self._upgrade_ignored_until
-
-    def _account_upgrade_visit(self):
-        """Called when leaving UPGRADE for NORMAL (close tap or
-        timeout — _enter is the single funnel, so both land here). A
-        visit with no buy is empty; UPGRADE_EMPTY_VISITS in a row
-        ignores the button for UPGRADE_IGNORE_SECONDS. A visit with
-        a buy resets the count."""
-
-        if self._upgrade_did_item:
-
-            self._upgrade_empty_visits = 0
-
-            return
-
-        self._upgrade_empty_visits += 1
-
-        if self._upgrade_empty_visits >= UPGRADE_EMPTY_VISITS:
-
-            self._upgrade_empty_visits = 0
-
-            self._upgrade_ignored_until = (
-                time.monotonic() + UPGRADE_IGNORE_SECONDS
-            )
-
-            logger.warning(
-                "UPGRADE empty %d times in a row — "
-                "ignoring `upgrade` for %.0fs",
-                UPGRADE_EMPTY_VISITS,
-                UPGRADE_IGNORE_SECONDS,
-            )
 
     def _find_badged_food(self, detections):
         """First 'food' detection with a 'red_arrow' badge on it (Karahan-style gate). The badge floats above the dish, so the test is badge-center inside the dish box inflated by RED_ARROW_GATE_MARGIN — not IoU (badge and dish barely overlap)."""
@@ -1487,7 +869,7 @@ class StateMachine:
             if detection.get("category") != "food":
                 continue
 
-            if self._is_ignored_food(detection):
+            if self._is_ignored(detection, "food"):
                 continue
 
             if any(
@@ -1531,12 +913,6 @@ class StateMachine:
         if not detections:
             return None
 
-        ignorada = (
-            self._is_ignored_new_point
-            if category == "new_point"
-            else self._is_ignored_food
-        )
-
         for badge in detections:
 
             if badge.get("category") != "red_arrow":
@@ -1544,7 +920,7 @@ class StateMachine:
 
             proxy = self._badge_proxy(badge, category)
 
-            if ignorada(proxy):
+            if self._is_ignored(proxy, category):
                 continue
 
             return proxy
@@ -1566,188 +942,3 @@ class StateMachine:
             "height": badge["height"],
             "fallback": "red_arrow",
         }
-
-    def _city_stuck_check(self):
-        """Recovery ladder for a city going nowhere (shikhar-style escalation): 10 min without progress forces a full sweep; 15 min force-stops + relaunches the game. Only runs in NORMAL — inside a panel we are mid-task, not stuck."""
-
-        if self.state != NORMAL:
-            return
-
-        # Game not in front (crashed, or the user opened something):
-        # main.py's game-ensure owns that case. Firing here would
-        # swipe and restart into the wrong app.
-        if not self._game_in_foreground:
-            return
-
-        idle = time.monotonic() - self._last_progress
-
-        if (
-            idle >= CITY_STUCK_RESTART_AFTER
-            and self._recovery_stage < 2
-        ):
-
-            self._recovery_stage = 2
-
-            logger.warning(
-                "no progress for %.0fs — restarting %s",
-                idle,
-                GAME_PACKAGE,
-            )
-
-            restarted = self.action_manager.android.restart_package(
-                GAME_PACKAGE
-            )
-
-            # Fresh process, fresh eyes: whatever was wedged is
-            # gone, and the relaunch needs settle time before taps.
-            # The ladder rearms (stage back to 0): still stuck in
-            # 10 more minutes means sweeping again, not silence.
-            # The _last_progress reset above is what stops an
-            # immediate refire, not the stage.
-            self.reset()
-            self.last_action_time = time.monotonic()
-            self._last_progress = time.monotonic()
-            self._recovery_stage = 0
-
-            if not restarted:
-
-                logger.warning(
-                    "restart failed — carrying on without it"
-                )
-
-        elif (
-            idle >= CITY_STUCK_SWEEP_AFTER
-            and self._recovery_stage < 1
-        ):
-
-            self._recovery_stage = 1
-
-            logger.warning(
-                "no progress for %.0fs — forcing full sweep",
-                idle,
-            )
-
-            # Ignored dishes get a new chance, and the next
-            # update swipes immediately instead of waiting out
-            # the exploration interval.
-            self._reset_food_tracking()
-            self.explore_anchor = 0.0
-            self.explore_found = False
-
-    @staticmethod
-    def _iou(a, b):
-
-        ax2 = a["x"] + a["width"]
-        ay2 = a["y"] + a["height"]
-
-        bx2 = b["x"] + b["width"]
-        by2 = b["y"] + b["height"]
-
-        inter_width = min(ax2, bx2) - max(a["x"], b["x"])
-        inter_height = min(ay2, by2) - max(a["y"], b["y"])
-
-        if inter_width <= 0 or inter_height <= 0:
-            return 0.0
-
-        intersection = inter_width * inter_height
-
-        union = (
-            a["width"] * a["height"]
-            + b["width"] * b["height"]
-            - intersection
-        )
-
-        return intersection / union
-
-    def reset(self):
-
-        self._enter(NORMAL)
-
-        self.last_action_time = 0.0
-
-        self._food_target = None
-        self._reset_food_tracking()
-
-    def _delay_exploration(self):
-        """Something was found: POSTPONES the next swipe without resetting the sweep cycle (renamed from `_reset_exploration` — resetting the count here made the bot always sweep the same slice of the screen, since almost every swipe finds something)."""
-
-        if not SWIPE_WAIT_FOR_NO_ACTION:
-            return
-
-        if not self.explore_found:
-            self.explore_anchor = time.monotonic()
-            self.explore_found = True
-
-    def exploration_interval(self):
-        """How long to wait for the next swipe: exploration_delay when nothing was found, exploration_action_delay (longer) when it was — derived from explore_found instead of stored."""
-
-        return (
-            self.exploration_action_delay
-            if self.explore_found
-            else self.exploration_delay
-        )
-
-    def _explore_screen(self):
-
-        now = time.monotonic()
-
-        if (
-            now - self.explore_anchor
-            < self.exploration_interval()
-        ):
-            return False
-
-        if not self._can_act():
-            return False
-
-        logger.info(
-            "explore: swipe %s %d/%d",
-            self.swipe_direction,
-            self.swipe_count + 1,
-            self.max_swipes,
-        )
-
-        if not self.action_manager.swipe(
-            self.swipe_direction
-        ):
-            return False
-
-        self.last_action_time = now
-
-        # Back to the NORMAL pace: from here the next swipe
-        # is in exploration_delay. Finding something is what switches that
-        # to the 15 s (_delay_exploration).
-        self.explore_anchor = now
-
-        self.explore_found = False
-
-        # From here on SWIPE_WAITING_TIME applies, not
-        # ACTION_SETTLE: the view just moved as a whole, and
-        # no detection from before it settles is worth a tap.
-        self._last_was_swipe = True
-
-        # Real swipe: ignored items get a new chance.
-        self._reset_food_tracking()
-
-        # Exploration does not go through _act, so it must record
-        # here. It is a bot decision like any other: "found
-        # nothing, scrolling the screen" — and for training up and down are
-        # different labels, hence the direction in the NAME.
-        self._record(
-            f"swipe_{self.swipe_direction}",
-            None,
-        )
-
-        self.swipe_count += 1
-
-        if self.swipe_count >= self.max_swipes:
-
-            self.swipe_direction = (
-                "down"
-                if self.swipe_direction == "up"
-                else "up"
-            )
-
-            self.swipe_count = 0
-
-        return True
