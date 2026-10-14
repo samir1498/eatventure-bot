@@ -16,10 +16,13 @@ from core import log                              # noqa: E402
 from core.config import (                         # noqa: E402
     ACTION_COOLDOWN,
     ACTION_SETTLE,
+    CITY_STUCK_RESTART_AFTER,
+    CITY_STUCK_SWEEP_AFTER,
     DISMISS_ACTIONS,
     DISMISS_ATTEMPTS_BEFORE_SCROLL,
     EXPLORATION_DELAY,
     EXPLORATION_DELAY_AFTER_ACTION,
+    GAME_PACKAGE,
     GRAY_STUCK_UPDATES,
     GRAY_SUPPRESS_UPDATES,
     MAX_DETECTION_AGE,
@@ -468,7 +471,7 @@ def test_food_sem_badge_ainda_toca_mas_desiste_e_ignora():
     tapped (badge templates miss on some views — a strict gate blinded
     the bot entirely). The tap MUST arm the give-up timer on entry and
     the timeout path MUST register a failure, so after
-    FOOD_MAX_ATTEMPTS the dish is ignored instead of tapped forever
+    GIVE_UP_MAX_ATTEMPTS the dish is ignored instead of tapped forever
     (the "FOOD stuck" infinite loop)."""
 
     machine, actions, clock = build()
@@ -511,7 +514,7 @@ def test_food_sem_badge_ainda_toca_mas_desiste_e_ignora():
 def test_red_arrow_fallback_taps_badge_when_food_missing():
     """Badge with no dish (occlusion, e.g. pet over it): taps the
     badge center as a dish proxy, arms the give-up timer, and after
-    FOOD_MAX_ATTEMPTS the badge is ignored instead of tapped forever."""
+    GIVE_UP_MAX_ATTEMPTS the badge is ignored instead of tapped forever."""
 
     machine, actions, clock = build()
 
@@ -605,7 +608,7 @@ def test_red_arrow_fallback_retries_ignored_food_as_new_point():
 
 def test_red_arrow_fallback_new_point_ignores_after_failures():
     """Badge that fails as new_point too is ignored after
-    FOOD_MAX_ATTEMPTS instead of tapped forever."""
+    GIVE_UP_MAX_ATTEMPTS instead of tapped forever."""
 
     machine, actions, clock = build()
 
@@ -1896,6 +1899,85 @@ def test_apenas_acoes_de_fechar_escalam():
     assert "gray_max" in DISMISS_ACTIONS
     assert "dismiss" in DISMISS_ACTIONS
     assert "open_box" not in DISMISS_ACTIONS
+
+
+def test_city_stuck_sweep_clears_give_up_and_swipes_soon():
+    """10 min without progress: forced sweep clears the give-up
+    lists and swipes immediately instead of waiting out the
+    exploration interval."""
+
+    machine, actions, clock = build()
+
+    machine.action_settle = 0.0
+    machine.action_cooldown = 0.0
+
+    machine._give_up["food"]["ignored"].append(
+        (detection("food"), clock.now)
+    )
+
+    machine._last_progress = (
+        clock.now - CITY_STUCK_SWEEP_AFTER - 1.0
+    )
+
+    machine.update([])
+
+    assert machine._recovery_stage == 1, machine._recovery_stage
+    assert machine._give_up["food"]["ignored"] == []
+    assert ("swipe", machine.swipe_direction) in actions.calls
+
+
+def test_reset_clears_wedged_state():
+    """A city restart must not inherit wedged bookkeeping:
+    suppression, dismiss ladder, give-up lists, and the
+    time-boxed upgrade ignore are all zeroed."""
+
+    machine, actions, clock = build()
+
+    machine._up_food_suppressed = 5
+    machine._dismiss_attempts = 3
+    machine._upgrade_ignored_until = clock.now + 50.0
+    machine._give_up["food"]["ignored"].append(
+        (detection("food"), clock.now)
+    )
+
+    machine.reset()
+
+    assert machine._up_food_suppressed == 0
+    assert machine._dismiss_attempts == 0
+    assert machine._upgrade_ignored_until == 0.0
+    assert machine._give_up["food"]["ignored"] == []
+
+
+def test_city_stuck_restart_relaunches_and_resets():
+    """15 min without progress: the game package is restarted and
+    the wedged counters are cleared with it."""
+
+    machine, actions, clock = build()
+
+    machine.action_settle = 0.0
+    machine.action_cooldown = 0.0
+
+    class FakeAndroid:
+
+        def __init__(self):
+            self.restarts = []
+
+        def restart_package(self, package):
+            self.restarts.append(package)
+            return True
+
+    actions.android = FakeAndroid()
+
+    machine._up_food_suppressed = 5
+    machine._last_progress = (
+        clock.now - CITY_STUCK_RESTART_AFTER - 1.0
+    )
+
+    machine.update([])
+
+    assert actions.android.restarts == [GAME_PACKAGE]
+    assert machine._up_food_suppressed == 0
+    assert machine._recovery_stage == 0, machine._recovery_stage
 
 
 def main():

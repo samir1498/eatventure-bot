@@ -402,14 +402,14 @@ SWIPE_START_DIRECTION = "down"
 # ==== FOOD ====
 
 UP_FOOD_WAIT = 2.0
-FOOD_IGNORE_IOU = 0.5
-FOOD_MAX_ATTEMPTS = 3
+GIVE_UP_IGNORE_IOU = 0.5
+GIVE_UP_MAX_ATTEMPTS = 3
 
 # Ignored dishes get a second chance after this long even with no
 # swipe: a bot kept busy by other chrome postpones exploration
 # forever, and swipe-only expiry would blind it to the dish
 # permanently.
-FOOD_IGNORE_TTL = 300.0
+GIVE_UP_IGNORE_TTL = 300.0
 
 
 # ==== UPGRADE ====
@@ -446,7 +446,7 @@ RED_ARROW_GATE_MARGIN = 100
 # detected (occlusion, e.g. pet standing over the plot; empty dashed
 # plots read as nothing). Taps the badge center as a station proxy
 # through the normal food/new_point actions, so the give-up timer and
-# FOOD_MAX_ATTEMPTS ignore still guard loops. Food proxies fire
+# GIVE_UP_MAX_ATTEMPTS ignore still guard loops. Food proxies fire
 # first; a badge food gave up on is retried as new_point.
 RED_ARROW_FALLBACK_ENABLED = True
 RED_ARROW_FALLBACK_CATEGORIES = ("food", "new_point")

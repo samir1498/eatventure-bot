@@ -413,7 +413,7 @@ class StateMachine(FailureMixin, ExplorationMixin):
         # Real swipe: ignored items may now be in a different
         # position, or off screen. Worth trying again.
         if self._last_was_swipe:
-            self._reset_food_tracking()
+            self._reset_give_up_tracking()
 
         # Same reasoning as the cycle below: only counts what
         # actually went out.
@@ -703,17 +703,7 @@ class StateMachine(FailureMixin, ExplorationMixin):
         self.up_food_wait_start = None
 
         # Switching state is progress: counts reset.
-        self._last_action = None
-        self._repeat_count = 0
-        self._up_food_repeats = 0
-        self._up_food_streak = 0
-        self._up_food_suppressed = 0
-        self._gray_streak = 0
-        self._gray_suppressed = 0
-        self._box_streak = 0
-        self._box_suppressed = 0
-        self._dismiss_attempts = 0
-        self._dismiss_rounds = 0
+        self._clear_stuck_counters()
 
         if state != FOOD and previous_state != FOOD:
 
@@ -748,7 +738,7 @@ class StateMachine(FailureMixin, ExplorationMixin):
         # no up_food AND no gray, or tap landed on a dead frame), so
         # the dish would be tapped again on the next NORMAL pass —
         # the "FOOD stuck" infinite loop. Registering here feeds the
-        # FOOD_MAX_ATTEMPTS ignore instead.
+        # GIVE_UP_MAX_ATTEMPTS ignore instead.
         if self._panel_target is not None:
 
             if self.state == FOOD:
@@ -929,7 +919,10 @@ class StateMachine(FailureMixin, ExplorationMixin):
 
     @staticmethod
     def _badge_proxy(badge, category):
-        """Synthetic station detection centered on the badge."""
+        """Synthetic station detection centered on the badge. The
+        confidence is the badge's own (the proxy carries no dish
+        match) — the only candidate in play when it fires, so no
+        ordering against real detections is affected."""
 
         return {
             "category": category,

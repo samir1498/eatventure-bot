@@ -15,9 +15,9 @@ from core.config import (
     BOX_SUPPRESS_UPDATES,
     DISMISS_ACTIONS,
     DISMISS_ATTEMPTS_BEFORE_SCROLL,
-    FOOD_IGNORE_IOU,
-    FOOD_IGNORE_TTL,
-    FOOD_MAX_ATTEMPTS,
+    GIVE_UP_IGNORE_IOU,
+    GIVE_UP_IGNORE_TTL,
+    GIVE_UP_MAX_ATTEMPTS,
     GRAY_STUCK_UPDATES,
     GRAY_SUPPRESS_UPDATES,
     REPEATED_ACTION_WARNING,
@@ -107,6 +107,23 @@ class FailureMixin:
 
         # Whether the current UPGRADE visit bought anything yet.
         self._upgrade_did_item = False
+
+    def _clear_stuck_counters(self):
+        """Zeroes the stuck/suppression ladders (repeat, trap, popups,
+        dismiss). Shared by _enter and reset(): the two used to list
+        the same fields inline, and the copies already diverged once."""
+
+        self._last_action = None
+        self._repeat_count = 0
+        self._up_food_repeats = 0
+        self._up_food_streak = 0
+        self._up_food_suppressed = 0
+        self._gray_streak = 0
+        self._gray_suppressed = 0
+        self._box_streak = 0
+        self._box_suppressed = 0
+        self._dismiss_attempts = 0
+        self._dismiss_rounds = 0
 
     def _track_stuck_popups(self, detections):
         """Stuck-popup suppression counters (up_food / gray pair /
@@ -349,14 +366,14 @@ class FailureMixin:
         self._enter(NORMAL)
 
     def _register_give_up(self, target, kind):
-        """Counts CONSECUTIVE give-ups on the same item (by IoU); on reaching FOOD_MAX_ATTEMPTS, ignores it until the next swipe or FOOD_IGNORE_TTL passing, whichever comes first — before that, returns to NORMAL and lets it try again (it may just be up_food slow to appear). Per-kind counters: a badge food gave up on gets a full new_point chance, not a shared one."""
+        """Counts CONSECUTIVE give-ups on the same item (by IoU); on reaching GIVE_UP_MAX_ATTEMPTS, ignores it until the next swipe or GIVE_UP_IGNORE_TTL passing, whichever comes first — before that, returns to NORMAL and lets it try again (it may just be up_food slow to appear). Per-kind counters: a badge food gave up on gets a full new_point chance, not a shared one."""
 
         tracked = self._give_up[kind]
 
         if (
             tracked["fail_target"] is not None
             and self._iou(target, tracked["fail_target"])
-            >= FOOD_IGNORE_IOU
+            >= GIVE_UP_IGNORE_IOU
         ):
             tracked["fail_count"] += 1
 
@@ -365,14 +382,14 @@ class FailureMixin:
 
         tracked["fail_target"] = target
 
-        if tracked["fail_count"] < FOOD_MAX_ATTEMPTS:
+        if tracked["fail_count"] < GIVE_UP_MAX_ATTEMPTS:
             return
 
         logger.warning(
             "'%s' without up_food in %d consecutive attempts — "
             "ignoring until the next swipe",
             kind,
-            FOOD_MAX_ATTEMPTS,
+            GIVE_UP_MAX_ATTEMPTS,
         )
 
         tracked["ignored"].append((target, time.monotonic()))
@@ -380,7 +397,7 @@ class FailureMixin:
         tracked["fail_target"] = None
         tracked["fail_count"] = 0
 
-    def _reset_food_tracking(self):
+    def _reset_give_up_tracking(self):
         """Forgets ignored items and the attempt count — called on every real swipe, which changes what is on screen."""
 
         for tracked in self._give_up.values():
@@ -389,7 +406,7 @@ class FailureMixin:
             tracked["fail_count"] = 0
 
     def _is_ignored(self, detection, kind):
-        """Same item as one that already exhausted UP_FOOD_WAIT without up_food (same on-screen position, compared by IoU since the screen does not move outside a swipe). Entries expire after FOOD_IGNORE_TTL — a bot kept busy by other chrome never swipes, and swipe-only expiry would ignore the dish forever. Per-kind lists: a badge food gave up on is retried as new_point."""
+        """Same item as one that already exhausted UP_FOOD_WAIT without up_food (same on-screen position, compared by IoU since the screen does not move outside a swipe). Entries expire after GIVE_UP_IGNORE_TTL — a bot kept busy by other chrome never swipes, and swipe-only expiry would ignore the dish forever. Per-kind lists: a badge food gave up on is retried as new_point."""
 
         now = time.monotonic()
 
@@ -398,13 +415,13 @@ class FailureMixin:
         alive = [
             (ignored, ignored_at)
             for ignored, ignored_at in tracked["ignored"]
-            if now - ignored_at < FOOD_IGNORE_TTL
+            if now - ignored_at < GIVE_UP_IGNORE_TTL
         ]
 
         tracked["ignored"] = alive
 
         return any(
-            self._iou(detection, ignored) >= FOOD_IGNORE_IOU
+            self._iou(detection, ignored) >= GIVE_UP_IGNORE_IOU
             for ignored, _ in alive
         )
 

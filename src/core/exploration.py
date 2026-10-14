@@ -20,8 +20,9 @@ logger = log.get("state")
 
 
 class ExplorationMixin:
-    """Owns nothing at rest — all state lives on the machine (shared
-    self namespace, same as FailureMixin). Moved verbatim."""
+    """Swipe pacing, sweep cycle, and city-stuck recovery. Owns the
+    exploration trackers below (shared self namespace, same pattern
+    as FailureMixin). Moved verbatim from state_machine."""
 
     def _init_exploration_tracking(self):
 
@@ -143,18 +144,28 @@ class ExplorationMixin:
             # Ignored dishes get a new chance, and the next
             # update swipes immediately instead of waiting out
             # the exploration interval.
-            self._reset_food_tracking()
+            self._reset_give_up_tracking()
             self.explore_anchor = 0.0
             self.explore_found = False
 
     def reset(self):
+        """Fresh process after a city restart: wedged bookkeeping must
+        not survive it. _enter(NORMAL) is a no-op when already NORMAL
+        (the stuck-restart case), so the stuck ladders are cleared
+        explicitly here."""
 
         self._enter(NORMAL)
 
-        self.last_action_time = 0.0
+        self._clear_stuck_counters()
 
         self._panel_target = None
-        self._reset_food_tracking()
+        self._reset_give_up_tracking()
+
+        # Fresh process, unknown upgrade state: a time-boxed ignore
+        # inherited from before the restart could hide a newly
+        # affordable button for the rest of its window.
+        self._upgrade_empty_visits = 0
+        self._upgrade_ignored_until = 0.0
 
     def _delay_exploration(self):
         """Something was found: POSTPONES the next swipe without resetting the sweep cycle (renamed from `_reset_exploration` — resetting the count here made the bot always sweep the same slice of the screen, since almost every swipe finds something)."""
@@ -215,7 +226,7 @@ class ExplorationMixin:
         self._last_was_swipe = True
 
         # Real swipe: ignored items get a new chance.
-        self._reset_food_tracking()
+        self._reset_give_up_tracking()
 
         # Exploration does not go through _act, so it must record
         # here. It is a bot decision like any other: "found
