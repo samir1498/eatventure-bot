@@ -138,6 +138,13 @@
       "confidence": 0.911,
       "x": 912,
       "y": 2192
+    },
+    {
+      "category": "renovate",
+      "color_similarity": 0.9841,
+      "confidence": 0.8404,
+      "x": 682,
+      "y": 1347
     }
   ]
 }

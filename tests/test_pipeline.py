@@ -668,14 +668,26 @@ def test_resolucao_proporcional_continua_valendo():
         ), (largura, altura, deteccoes)
 
 
-def test_referencia_nao_paga_pelas_escalas_extra():
-    """On the reference device the extra scales would be pure cost: triple the templates for no trade."""
+def test_referencia_usa_o_comb_de_escalas():
+    """At the reference the zoom-tolerance comb applies too (camera zoom
+    changes on-screen icon size even there): every template yields one
+    variant per TEMPLATE_SCALE_STEPS, same as off-reference."""
 
-    from core.config import REFERENCE_HEIGHT, REFERENCE_WIDTH
+    from core.config import (
+        REFERENCE_HEIGHT,
+        REFERENCE_WIDTH,
+        TEMPLATE_SCALE_STEPS,
+    )
 
     detector = Detector()
 
     originais = len(detector.templates)
+
+    escalas = {
+        round(1.0 * passo, 4)
+        for passo in TEMPLATE_SCALE_STEPS
+        if passo > 0
+    }
 
     # In both orientations: the game runs landscape.
     for largura, altura in (
@@ -687,14 +699,10 @@ def test_referencia_nao_paga_pelas_escalas_extra():
 
         indice = detector._templates_for(largura, altura)
 
-        assert indice is detector.by_category, (
-            "referência não devia gerar variante de escala"
-        )
-
         assert (
             sum(len(lista) for lista in indice.values())
-            == originais
-        )
+            == originais * len(escalas)
+        ), "referência devia gerar o comb de escalas"
 
     # Off-reference, then yes.
     fora = detector._templates_for(1080, 1920)
